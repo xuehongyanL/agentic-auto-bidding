@@ -1,0 +1,16 @@
+[project]
+name = "aab-core"
+version = "0.1.0"
+description = "Core abstractions for bidding agent systems"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+    "langgraph>=0.0.20",
+    "langchain-core>=0.1.0",
+    "fastmcp>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

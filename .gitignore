@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+
+# Saved models and logs
+saved_model/
+log/
+
+# Data
+data/
