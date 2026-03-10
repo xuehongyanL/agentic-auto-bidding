@@ -7,3 +7,9 @@ log/
 
 # Data
 data/
+
+# Claude Code
+CLAUDE.md
+
+# VS Code
+.vscode/
