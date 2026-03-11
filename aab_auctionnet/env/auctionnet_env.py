@@ -1,0 +1,266 @@
+"""
+AuctionNet 数据集的环境实现
+
+将 AuctionNet 数据读取和模拟出价逻辑封装在 Env 中。
+注意：历史记录由 Agent 模块维护，Env 仅负责当前时间步的数据读取和竞拍模拟。
+"""
+
+import os
+import pickle
+import random
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+
+from aab_core.env.offline_env import OfflineEnv
+
+
+class AuctionNetEnv(OfflineEnv):
+    """
+    AuctionNet 数据集的离线环境实现
+
+    加载 AuctionNet 流量数据，模拟广告竞拍过程。
+    历史记录由 Agent 模块维护。
+    """
+
+    def __init__(
+        self,
+        data_filename: str,
+        min_remaining_budget: float = 0.1,
+    ):
+        """
+        初始化 AuctionNet 环境
+
+        Args:
+            data_filename: 数据文件路径（CSV 或 PKL）
+            min_remaining_budget: 最小剩余预算阈值，低于此值时停止出价
+        """
+        self._data_filename = data_filename
+        self._min_remaining_budget = min_remaining_budget
+
+        # 数据存储
+        self._test_dict: Dict = {}
+        self._keys: List[Tuple] = []
+
+        # 当前状态
+        self._current_key: Optional[Tuple] = None
+        self._current_timestep: int = 0
+        self._num_timesteps: int = 0
+
+        # 当前episode数据
+        self._pValues: List[np.ndarray] = []
+        self._pValueSigmas: List[np.ndarray] = []
+        self._leastWinningCosts: List[np.ndarray] = []
+        self._budget: float = 0.0
+        self._cpa_constraint: float = 0.0
+        self._remaining_budget: float = 0.0
+
+        # 加载数据
+        self._load_data()
+
+    def _load_data(self) -> None:
+        """加载单个数据文件"""
+        if not os.path.exists(self._data_filename):
+            raise ValueError(f"Data file not found: {self._data_filename}")
+
+        self._load_file(self._data_filename)
+
+    def _load_file(self, file_path: str) -> None:
+        """加载单个数据文件"""
+        raw_data_path = file_path.replace('.csv', '.pkl')
+
+        # 尝试使用缓存的 pkl 文件
+        if os.path.exists(raw_data_path):
+            with open(raw_data_path, 'rb') as f:
+                data = pickle.load(f)
+        else:
+            import pandas as pd
+            data = pd.read_csv(file_path, dtype={
+                'deliveryPeriodIndex': str,
+                'advertiserNumber': str,
+                'timeStepIndex': int,
+                'advertiserCategoryIndex': str,
+            })
+            # 缓存为 pkl
+            with open(raw_data_path, 'wb') as f:
+                pickle.dump(data, f)
+
+        # 按 (period, advertiser) 分组
+        grouped_data = data.sort_values('timeStepIndex').groupby(
+            ['deliveryPeriodIndex', 'advertiserNumber']
+        )
+
+        for key, group in grouped_data:
+            if key not in self._test_dict:
+                self._test_dict[key] = group
+                self._keys.append(key)
+
+    def keys(self) -> List[Tuple]:
+        """返回所有可用的 (period_id, advertiser_id) 组合"""
+        return self._keys.copy()
+
+    def reset(self, key: Optional[Tuple] = None) -> Dict[str, Any]:
+        """
+        重置环境到指定 episode 的初始状态
+
+        Args:
+            key: 可选的 (period_id, advertiser_id) 组合，
+                 如果为 None 则随机选择
+
+        Returns:
+            包含初始化信息的字典
+        """
+        # 选择 key
+        if key is None:
+            self._current_key = random.choice(self._keys)
+        else:
+            if key not in self._keys:
+                raise ValueError(f"Invalid key: {key}")
+            self._current_key = key
+
+        # 加载该 key 对应的数据
+        data = self._test_dict[self._current_key]
+        self._pValues = data.groupby('timeStepIndex')['pValue'].apply(
+            list
+        ).apply(np.array).tolist()
+        self._pValueSigmas = data.groupby('timeStepIndex')['pValueSigma'].apply(
+            list
+        ).apply(np.array).tolist()
+        self._leastWinningCosts = data.groupby('timeStepIndex')['leastWinningCost'].apply(
+            list
+        ).apply(np.array).tolist()
+
+        self._num_timesteps = len(self._pValues)
+        self._budget = float(data['budget'].iloc[0])
+        self._cpa_constraint = float(data['CPAConstraint'].iloc[0])
+
+        # 重置状态
+        self._current_timestep = 0
+        self._remaining_budget = self._budget
+
+        return {
+            'budget': self._budget,
+            'cpa_constraint': self._cpa_constraint,
+            'num_timesteps': self._num_timesteps,
+        }
+
+    def step(self, pacer: float) -> Dict[str, Any]:
+        """
+        执行一步出价
+
+        Args:
+            pacer: 出价系数/步调器，用于调整出价策略
+
+        Returns:
+            包含以下键的字典:
+            - cost: 本次竞拍花费
+            - gmv: 本次 GMV (conversion * cpa_constraint)
+            - total_cost: 累计花费
+            - done: 是否结束
+        """
+        if self._current_timestep >= self._num_timesteps:
+            raise RuntimeError("Episode already finished, call reset() first")
+
+        # 获取当前时间步的数据
+        pValue = self._pValues[self._current_timestep]
+        pValueSigma = self._pValueSigmas[self._current_timestep]
+        leastWinningCost = self._leastWinningCosts[self._current_timestep]
+
+        # 预算不足时不出价
+        if self._remaining_budget < self._min_remaining_budget:
+            bid = np.zeros(pValue.shape[0])
+        else:
+            # 出价 = bid * 目标CPA * pValue
+            bid = pacer * self._cpa_constraint * pValue
+
+        # 模拟竞拍
+        tick_value, tick_cost, tick_status, tick_conversion = self._simulate_ad_bidding(
+            pValue, pValueSigma, bid, leastWinningCost
+        )
+
+        # 处理超预算情况
+        over_cost_ratio = max(
+            (np.sum(tick_cost) - self._remaining_budget) / (np.sum(tick_cost) + 1e-4),
+            0
+        )
+        while over_cost_ratio > 0:
+            pv_index = np.where(tick_status == 1)[0]
+            dropped_pv_index = np.random.choice(
+                pv_index,
+                int(np.ceil(pv_index.shape[0] * over_cost_ratio)),
+                replace=False
+            )
+            bid[dropped_pv_index] = 0
+            tick_value, tick_cost, tick_status, tick_conversion = self._simulate_ad_bidding(
+                pValue, pValueSigma, bid, leastWinningCost
+            )
+            over_cost_ratio = max(
+                (np.sum(tick_cost) - self._remaining_budget) / (np.sum(tick_cost) + 1e-4),
+                0
+            )
+
+        # 更新预算和状态
+        step_cost = float(np.sum(tick_cost))
+        conversion = float(np.sum(tick_conversion))
+        gmv = conversion * self._cpa_constraint
+        self._remaining_budget -= step_cost
+        total_cost = self._budget - self._remaining_budget
+
+        # 准备下一时间步
+        self._current_timestep += 1
+        done = self._current_timestep >= self._num_timesteps
+
+        return {
+            'cost': step_cost,
+            'gmv': gmv,
+            'total_cost': total_cost,
+            'done': done,
+        }
+
+    def _simulate_ad_bidding(
+        self,
+        pValues: np.ndarray,
+        pValueSigmas: np.ndarray,
+        bids: np.ndarray,
+        leastWinningCosts: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        模拟广告竞拍过程
+
+        Args:
+            pValues: 广告价值
+            pValueSigmas: 价值标准差
+            bids: 出价
+            leastWinningCosts: 最低获胜成本
+
+        Returns:
+            (tick_value, tick_cost, tick_status, tick_conversion)
+        """
+        tick_status = bids >= leastWinningCosts
+        tick_cost = leastWinningCosts * tick_status
+        values = np.random.normal(loc=pValues, scale=pValueSigmas)
+        values = values * tick_status
+        tick_value = np.clip(values, 0, 1)
+        tick_conversion = np.random.binomial(n=1, p=tick_value)
+
+        return tick_value, tick_cost, tick_status, tick_conversion
+
+    @property
+    def num_timesteps(self) -> int:
+        return self._num_timesteps
+
+    @property
+    def current_timestep(self) -> int:
+        return self._current_timestep
+
+    @property
+    def budget(self) -> float:
+        return self._budget
+
+    @property
+    def remaining_budget(self) -> float:
+        return self._remaining_budget
+
+    @property
+    def cpa_constraint(self) -> float:
+        return self._cpa_constraint
