@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+demo*.ipynb
 
 # Saved models and logs
 saved_model/
