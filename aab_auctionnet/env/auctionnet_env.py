@@ -144,6 +144,11 @@ class AuctionNetEnv(OfflineEnv):
             'num_timesteps': self._num_timesteps,
         }
 
+    def get_current_pvalues(self) -> np.ndarray:
+        if self._current_timestep >= self._num_timesteps:
+            return np.array([])
+        return self._pValues[self._current_timestep]
+
     def step(self, pacer: float) -> Dict[str, Any]:
         """
         执行一步出价
@@ -215,6 +220,15 @@ class AuctionNetEnv(OfflineEnv):
             'gmv': gmv,
             'total_cost': total_cost,
             'done': done,
+            'bid_mean': float(np.mean(bid)) if bid.shape[0] > 0 else 0.0,
+            'bid_sum': float(np.sum(bid)),
+            'pvalue_mean': float(np.mean(pValue)) if pValue.shape[0] > 0 else 0.0,
+            'pvalue_sum': float(np.sum(pValue)),
+            'pv_num': pValue.shape[0],
+            'conversion': conversion,
+            'value_mean': float(np.mean(tick_value)) if tick_value.shape[0] > 0 else 0.0,
+            'win_rate': float(np.mean(tick_status)) if tick_status.shape[0] > 0 else 0.0,
+            'least_winning_cost_mean': float(np.mean(leastWinningCost)) if leastWinningCost.shape[0] > 0 else 0.0,
         }
 
     def _simulate_ad_bidding(
