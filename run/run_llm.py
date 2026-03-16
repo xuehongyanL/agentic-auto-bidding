@@ -1,23 +1,16 @@
-import pickle
-
 import numpy as np
 
 from agb_auctionnet.env.auctionnet_env import AuctionNetEnv
 from agb_auctionnet.strategy.llm_strategy import AuctionNetLLMStrategy
-from agb_core.model.llm_model import LLMModel
-
-NORMALIZE_DICT_PATH = '/DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/normalize_dict.pkl'
+from agb_core.model.auction_net_llm_model import AuctionNetLLMModel
 
 
 def main():
-    with open(NORMALIZE_DICT_PATH, 'rb') as f:
-        normalize_dict = pickle.load(f)
-
     env = AuctionNetEnv(data_filename='/DATA/xuehy/ad/AAB/data/traffic/period-7.csv')
 
     window_size = 20
 
-    model = LLMModel(
+    model = AuctionNetLLMModel(
         model_path='/DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct',
         model_type='transformers',
         device='cuda',
