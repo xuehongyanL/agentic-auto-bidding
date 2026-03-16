@@ -7,7 +7,7 @@ Strategy 基类定义
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
-from aab_core.model.base_model import BaseModel
+from agb_core.model.base_model import BaseModel
 
 
 class BaseStrategy(ABC):

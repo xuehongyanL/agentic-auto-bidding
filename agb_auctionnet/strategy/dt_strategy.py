@@ -8,7 +8,7 @@ from typing import Any, Dict, Tuple
 
 import numpy as np
 
-from aab_auctionnet.strategy.base_strategy import AuctionNetBaseStrategy
+from agb_auctionnet.strategy.base_strategy import AuctionNetBaseStrategy
 
 
 class AuctionNetDTStrategy(AuctionNetBaseStrategy):

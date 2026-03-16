@@ -6,7 +6,7 @@ AuctionNet 基础策略实现
 
 from typing import Any, Dict, List
 
-from aab_core.strategy.base_strategy import BaseStrategy
+from agb_core.strategy.base_strategy import BaseStrategy
 
 
 class AuctionNetBaseStrategy(BaseStrategy):

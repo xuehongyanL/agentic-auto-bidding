@@ -2,10 +2,9 @@ import pickle
 
 import numpy as np
 
-from aab_auctionnet.env.auctionnet_env import AuctionNetEnv
-from aab_auctionnet.strategy.dt_strategy import AuctionNetDTStrategy
-from aab_core.model.dt_model import DTModel
-
+from agb_auctionnet.env.auctionnet_env import AuctionNetEnv
+from agb_auctionnet.strategy.dt_strategy import AuctionNetDTStrategy
+from agb_core.model.dt_model import DTModel
 
 NORMALIZE_DICT_PATH = '/DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/normalize_dict.pkl'
 

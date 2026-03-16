@@ -1,8 +1,8 @@
-# AAB-dev
+# AGB-dev
 
 Agentic Auto-Bidding Development Framework
 
 ## Packages
 
-- `aab-core` - Core abstractions for bidding agent systems
-- `aab-auctionnet` - AuctionNet dataset implementation
+- `agb-core` - Core abstractions for bidding agent systems
+- `agb-auctionnet` - AuctionNet dataset implementation

@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from aab_core.env.offline_env import OfflineEnv
+from agb_core.env.offline_env import OfflineEnv
 
 
 class AuctionNetEnv(OfflineEnv):

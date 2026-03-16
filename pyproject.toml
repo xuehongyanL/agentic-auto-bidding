@@ -1,5 +1,5 @@
 [project]
-name = "aab-dev"
+name = "agb-dev"
 version = "0.1.0"
 description = "Agentic Auto-Bidding Development Framework"
 readme = "README.md"
@@ -7,6 +7,6 @@ requires-python = ">=3.10"
 
 [tool.uv.workspace]
 members = [
-    "aab_core",
-    "aab_auctionnet",
+    "agb_core",
+    "agb_auctionnet",
 ]

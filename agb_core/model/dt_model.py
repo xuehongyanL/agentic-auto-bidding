@@ -4,15 +4,15 @@ DT Model 实现
 基于 GAVE/Decision Transformer 的出价模型。
 """
 
+import math
 from typing import Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 
-from aab_core.model.base_model import BaseModel
+from agb_core.model.base_model import BaseModel
 
 
 class CausalSelfAttention(nn.Module):

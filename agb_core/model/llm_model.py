@@ -6,7 +6,7 @@ LLM Model 实现
 
 from typing import Any, Dict, Tuple
 
-from aab_core.model.base_model import BaseModel
+from agb_core.model.base_model import BaseModel
 
 
 class LLMModel(BaseModel):

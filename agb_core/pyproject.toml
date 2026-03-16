@@ -1,5 +1,5 @@
 [project]
-name = "aab-core"
+name = "agb-core"
 version = "0.1.0"
 description = "Core abstractions for bidding agent systems"
 readme = "../README.md"

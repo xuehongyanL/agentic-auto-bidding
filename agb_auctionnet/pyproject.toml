@@ -1,11 +1,11 @@
 [project]
-name = "aab-auctionnet"
+name = "agb-auctionnet"
 version = "0.1.0"
-description = "AuctionNet dataset implementation for aab-core"
+description = "AuctionNet dataset implementation for agb-core"
 readme = "../README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "aab-core",
+    "agb-core",
     "pydantic>=2.0",
     "numpy>=1.24",
     "onnxruntime>=1.16",

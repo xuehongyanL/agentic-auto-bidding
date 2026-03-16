@@ -8,7 +8,7 @@ from typing import Any, Dict, Tuple
 
 import numpy as np
 
-from aab_auctionnet.strategy.dt_strategy import AuctionNetDTStrategy
+from agb_auctionnet.strategy.dt_strategy import AuctionNetDTStrategy
 
 
 class AuctionNetLLMStrategy(AuctionNetDTStrategy):
@@ -84,5 +84,6 @@ class AuctionNetLLMStrategy(AuctionNetDTStrategy):
         self._history_scores.append(curr_score)
 
         # 更新 base_strategy 的历史记录
-        from aab_auctionnet.strategy.base_strategy import AuctionNetBaseStrategy
+        from agb_auctionnet.strategy.base_strategy import \
+            AuctionNetBaseStrategy
         AuctionNetBaseStrategy.update(self, env_step_result)
