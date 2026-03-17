@@ -1,6 +1,8 @@
+import argparse
 import pickle
 
 import numpy as np
+import yaml
 
 from agb_auctionnet.env.auctionnet_env import AuctionNetEnv
 from agb_auctionnet.model.think_model import AuctionNetThinkModel
@@ -8,29 +10,35 @@ from agb_auctionnet.strategy.base_strategy import AuctionNetBaseStrategy
 from agb_core.model.act_model import ActModel
 from agb_core.model.agent_model import AgentModel
 
-NORMALIZE_DICT_PATH = '/DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/normalize_dict.pkl'
-
 
 def main():
-    with open(NORMALIZE_DICT_PATH, 'rb') as f:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, required=True)
+    args = parser.parse_args()
+
+    with open(args.config, 'r') as f:
+        config = yaml.safe_load(f)
+
+    with open(config['model']['act_model']['normalize_dict_path'], 'rb') as f:
         normalize_dict = pickle.load(f)
 
-    env = AuctionNetEnv(data_filename='/DATA/xuehy/ad/AAB/data/traffic/period-7.csv')
-
-    window_size = 20
+    env = AuctionNetEnv(data_filename=config['env']['data_path'])
 
     # 创建 Think 子模型
     think_model = AuctionNetThinkModel(
-        model_path='/DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct',
-        model_type='transformers',
-        device='cuda',
+        model_path=config['model']['think_model']['path'],
+        model_type=config['model']['think_model']['backend'],
+        device=config['device'],
+        temperature=config['model']['think_model']['temperature'],
+        max_tokens=config['model']['think_model']['max_tokens'],
+        verbose=config['model']['think_model']['verbose'],
     )
 
     # 创建 Act 子模型
     act_model = ActModel(
-        model_path='/DATA/xuehy/agent/models/Qwen/Qwen2.5-0.5B-Instruct',
-        model_type='transformers',
-        device='cuda',
+        model_path=config['model']['act_model']['path'],
+        model_type=config['model']['act_model']['backend'],
+        device=config['device'],
         state_mean=normalize_dict['state_mean'],
         state_std=normalize_dict['state_std'],
     )
@@ -39,7 +47,7 @@ def main():
     # 创建组合模型
     model = AgentModel(think_model, act_model)
 
-    strategy = AuctionNetBaseStrategy(model, window_size=window_size)
+    strategy = AuctionNetBaseStrategy(model, window_size=config['strategy']['window_size'])
 
     keys = env.keys()
     print(f'Available keys: {len(keys)}')
@@ -62,7 +70,7 @@ def main():
             strategy.cpm = float(np.mean(current_pvalues)) if current_pvalues.size > 0 else 0.0
             strategy.cpn = int(current_pvalues.size)
 
-            response, pacer = strategy.bidding()  # response 是 think 的文本，pacer 是 act 输出的真实 pacer
+            response, pacer = strategy.bidding()
 
             print(f'Step#{step}, pacer={pacer}')
             print(f'CoT: {response}')

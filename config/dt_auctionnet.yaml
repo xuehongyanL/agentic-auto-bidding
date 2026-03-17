@@ -1,0 +1,33 @@
+model:
+  name: DTModel
+  path: /DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/500000.pt
+  hidden_size: 512
+  n_layer: 8
+  n_head: 16
+  n_inner: 2048
+  scale: 2000.0
+  target_return: 4.0
+  normalize_dict_path: /DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/normalize_dict.pkl
+  block_config:
+    n_ctx: 1024
+    n_embd: 512
+    n_layer: 8
+    n_head: 16
+    n_inner: 1024
+    activation_function: relu
+    n_position: 1024
+    resid_pdrop: 0.1
+    attn_pdrop: 0.1
+
+strategy:
+  name: AuctionNetBaseStrtegy
+  state_dim: 16
+  action_dim: 1
+  window_size: 20
+
+env:
+  name: AuctionNetEnv
+  data_path: /DATA/xuehy/ad/AAB/data/traffic/period-7.csv
+  min_remaining_budget: 0.1
+
+device: cuda

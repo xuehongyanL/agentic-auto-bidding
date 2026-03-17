@@ -1,39 +1,43 @@
+import argparse
 import pickle
 
 import numpy as np
+import yaml
 
 from agb_auctionnet.env.auctionnet_env import AuctionNetEnv
 from agb_auctionnet.strategy.base_strategy import AuctionNetBaseStrategy
 from agb_core.model.dt_model import DTModel
 
-NORMALIZE_DICT_PATH = '/DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/normalize_dict.pkl'
-
 
 def main():
-    # action_dim: pacer 向量维度，1 表示标量
-    action_dim = 1
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, required=True)
+    args = parser.parse_args()
 
-    with open(NORMALIZE_DICT_PATH, 'rb') as f:
+    with open(args.config, 'r') as f:
+        config = yaml.safe_load(f)
+
+    with open(config['model']['normalize_dict_path'], 'rb') as f:
         normalize_dict = pickle.load(f)
 
-    env = AuctionNetEnv(data_filename='/DATA/xuehy/ad/AAB/data/traffic/period-7.csv')
+    env = AuctionNetEnv(data_filename=config['env']['data_path'])
 
     model = DTModel(
-        model_path='/DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/500000.pt',
-        state_dim=16,
-        action_dim=action_dim,
-        device='cpu',
-        hidden_size=512,
-        n_layer=8,
-        n_head=16,
-        n_inner=2048,
+        state_dim=config['strategy']['state_dim'],
+        action_dim=config['strategy']['action_dim'],
+        device=config['device'],
+        hidden_size=config['model']['hidden_size'],
+        n_layer=config['model']['n_layer'],
+        n_head=config['model']['n_head'],
+        n_inner=config['model']['n_inner'],
         state_mean=normalize_dict['state_mean'],
         state_std=normalize_dict['state_std'],
-        scale=2000.0,
-    )
-    model.eval()
+        scale=config['model']['scale'],
+        target_return=config['model']['target_return'],
+        block_config=config['model']['block_config'],
+    ).load_model(config['model']['path'])
 
-    strategy = AuctionNetBaseStrategy(model)
+    strategy = AuctionNetBaseStrategy(model, window_size=config['strategy']['window_size'])
 
     keys = env.keys()
     print(f'Available keys: {len(keys)}')

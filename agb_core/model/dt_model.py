@@ -82,18 +82,18 @@ class DTModel(BaseModel, nn.Module):
 
     def __init__(
         self,
-        model_path: Optional[str] = None,
-        state_dim: int = 16,
-        action_dim: int = 1,
-        device: str = 'cpu',
-        target_return: float = 4.0,
-        hidden_size: int = 512,
-        n_layer: int = 8,
-        n_head: int = 16,
-        n_inner: int = 1024,
+        state_dim: int,
+        action_dim: int,
+        device: str,
+        target_return: float,
+        hidden_size: int,
+        n_layer: int,
+        n_head: int,
+        n_inner: int,
+        scale: float,
+        block_config: dict,
         state_mean: Optional[np.ndarray] = None,
         state_std: Optional[np.ndarray] = None,
-        scale: float = 2000.0,
     ):
         """
         初始化 DT Model
@@ -121,37 +121,25 @@ class DTModel(BaseModel, nn.Module):
         self._n_layer = n_layer
         self._n_head = n_head
         self._n_inner = n_inner
+        self._block_config = block_config
 
         if state_mean is None:
             state_mean = np.zeros(state_dim, dtype=np.float32)
         if state_std is None:
             state_std = np.ones(state_dim, dtype=np.float32)
-        self._state_mean = state_mean.astype(np.float32)
-        self._state_std = state_std.astype(np.float32)
+        self._state_mean = torch.from_numpy(state_mean.astype(np.float32)).to(device)
+        self._state_std = torch.from_numpy(state_std.astype(np.float32)).to(device)
 
         super().__init__()
 
         self._build_model()
 
-        if model_path:
-            self._load_model(model_path)
+        self.to(device)
 
     def _build_model(self):
         """构建模型结构"""
-        block_config = {
-            'n_ctx': 1024,
-            'n_embd': 512,
-            'n_layer': 8,
-            'n_head': 16,
-            'n_inner': 1024,
-            'activation_function': 'relu',
-            'n_position': 1024,
-            'resid_pdrop': 0.1,
-            'attn_pdrop': 0.1,
-        }
-
         self._time_dim = 8
-        self.transformer = nn.ModuleList([Block(block_config) for _ in range(block_config['n_layer'])])
+        self.transformer = nn.ModuleList([Block(self._block_config) for _ in range(self._block_config['n_layer'])])
         self.embed_timestep = nn.Embedding(96, self._time_dim)
         self.embed_return = nn.Linear(1, self._hidden_size)
         self.embed_reward = nn.Linear(1, self._hidden_size)
@@ -189,10 +177,11 @@ class DTModel(BaseModel, nn.Module):
             nn.Sigmoid(),
         )
 
-    def _load_model(self, model_path: str) -> None:
+    def load_model(self, model_path: str) -> 'DTModel':
         """加载预训练模型"""
         self.load_state_dict(torch.load(model_path, map_location=self._device))
         self.eval()
+        return self
 
     def predict(
         self,
@@ -238,7 +227,7 @@ class DTModel(BaseModel, nn.Module):
 
 
         states = torch.where(attention_mask.view(-1, 1) == 1,
-                             (states - torch.tensor(self._state_mean, device=states.device)) / (torch.tensor(self._state_std, device=states.device) + 1e-9),
+                             (states - self._state_mean) / (self._state_std + 1e-9),
                              states)
 
         # print(states, actions, rewards, curr_score, timesteps, attention_mask)

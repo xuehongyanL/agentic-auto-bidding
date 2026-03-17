@@ -188,8 +188,8 @@ class ActModel(BaseModel, nn.Module):
             state_mean = np.zeros(state_dim, dtype=np.float32)
         if state_std is None:
             state_std = np.ones(state_dim, dtype=np.float32)
-        self._state_mean = state_mean.astype(np.float32)
-        self._state_std = state_std.astype(np.float32)
+        self._state_mean = torch.from_numpy(state_mean.astype(np.float32)).to(device)
+        self._state_std = torch.from_numpy(state_std.astype(np.float32)).to(device)
 
         # 占位符属性，与策略兼容
         self._target_return = 0.0
@@ -264,7 +264,7 @@ class ActModel(BaseModel, nn.Module):
         # 归一化 states
         states = dt_tuple[0]
         if isinstance(states, np.ndarray):
-            states = (states - self._state_mean) / (self._state_std + 1e-9)
+            states = (states - self._state_mean.cpu().numpy()) / (self._state_std.cpu().numpy() + 1e-9)
             dt_tuple = (states, dt_tuple[1], dt_tuple[2], dt_tuple[3], dt_tuple[4], dt_tuple[5])
 
         # 前向传播
