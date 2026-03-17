@@ -14,7 +14,6 @@ def main():
         model_path='/DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct',
         model_type='vllm',
         device='cuda',
-        window_size=window_size,
         verbose=1,
     )
 
@@ -41,15 +40,16 @@ def main():
             strategy.cpm = float(np.mean(current_pvalues)) if current_pvalues.size > 0 else 0.0
             strategy.cpn = int(current_pvalues.size)
 
-            response, direction = strategy.bidding()  # response 是文本，direction 是 -1/0/1
+            response, direction = strategy.bidding()  # response 是文本，direction 是 numpy array
 
             # 手动映射为真实 pacer
-            if direction == -1:
-                pacer = 0.8
-            elif direction == 0:
-                pacer = 1.0
-            else:  # direction == 1
-                pacer = 1.2
+            direction_scalar = int(direction.flatten()[0])
+            if direction_scalar == -1:
+                pacer = np.array([0.8])
+            elif direction_scalar == 0:
+                pacer = np.array([1.0])
+            else:  # direction_scalar == 1
+                pacer = np.array([1.2])
 
             # 修改 strategy 内部记录的最近一个 pacer
             if strategy._history_pacers:

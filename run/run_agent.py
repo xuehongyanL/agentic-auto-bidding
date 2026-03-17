@@ -24,7 +24,6 @@ def main():
         model_path='/DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct',
         model_type='transformers',
         device='cuda',
-        window_size=window_size,
     )
 
     # 创建 Act 子模型

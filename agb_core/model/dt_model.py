@@ -84,9 +84,8 @@ class DTModel(BaseModel, nn.Module):
         self,
         model_path: Optional[str] = None,
         state_dim: int = 16,
-        act_dim: int = 1,
+        action_dim: int = 1,
         device: str = 'cpu',
-        max_length: int = 20,
         target_return: float = 4.0,
         hidden_size: int = 512,
         n_layer: int = 8,
@@ -102,9 +101,8 @@ class DTModel(BaseModel, nn.Module):
         Args:
             model_path: 预训练模型路径
             state_dim: 状态维度
-            act_dim: 动作维度
+            action_dim: 动作维度
             device: 设备
-            max_length: 序列最大长度
             target_return: 目标返回值
             hidden_size: 隐藏层维度
             n_layer: Transformer层数
@@ -117,8 +115,7 @@ class DTModel(BaseModel, nn.Module):
         self._scale = scale
         self._device = device
         self._state_dim = state_dim
-        self._act_dim = act_dim
-        self._max_length = max_length
+        self._action_dim = action_dim
         self._target_return = target_return
         self._hidden_size = hidden_size
         self._n_layer = n_layer
@@ -159,14 +156,14 @@ class DTModel(BaseModel, nn.Module):
         self.embed_return = nn.Linear(1, self._hidden_size)
         self.embed_reward = nn.Linear(1, self._hidden_size)
         self.embed_state = nn.Linear(self._state_dim, self._hidden_size)
-        self.embed_action = nn.Linear(self._act_dim, self._hidden_size)
+        self.embed_action = nn.Linear(self._action_dim, self._hidden_size)
         self.trans_return = nn.Linear(self._time_dim + self._hidden_size, self._hidden_size)
         self.trans_reward = nn.Linear(self._time_dim + self._hidden_size, self._hidden_size)
         self.trans_state = nn.Linear(self._time_dim + self._hidden_size, self._hidden_size)
         self.trans_action = nn.Linear(self._time_dim + self._hidden_size, self._hidden_size)
         self.embed_ln = nn.LayerNorm(self._hidden_size)
         self.predict_action = nn.Sequential(
-            nn.Linear(self._hidden_size, self._act_dim),
+            nn.Linear(self._hidden_size, self._action_dim),
         )
         self.predict_state = nn.Linear(self._hidden_size, self._state_dim)
         self.predict_return = nn.Sequential(
@@ -217,7 +214,9 @@ class DTModel(BaseModel, nn.Module):
 
         _, (states, actions, rewards, curr_score, timesteps, attention_mask) = numeral
         action = self._get_action(states, actions, rewards, curr_score, timesteps, attention_mask)
-        return None, float(action)
+        # 确保返回 numpy array
+        action = action.detach().cpu().numpy()
+        return None, action
 
     def _get_action(self, states, actions, rewards, curr_score, timesteps, attention_mask):
         states = torch.from_numpy(states).to(self._device)

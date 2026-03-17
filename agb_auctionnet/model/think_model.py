@@ -6,6 +6,8 @@ AuctionNet Think Model 实现
 
 from typing import Any, Dict, Optional, Tuple
 
+import numpy as np
+
 from agb_core.model.think_model import ThinkModel
 
 
@@ -26,7 +28,8 @@ class AuctionNetThinkModel(ThinkModel):
         device: str = 'cuda',
         temperature: float = 0.0,
         max_tokens: int = 1024,
-        window_size: int = 20,
+        state_dim: int = 16,
+        action_dim: int = 1,
         verbose: int = 0,
     ):
         """
@@ -38,11 +41,13 @@ class AuctionNetThinkModel(ThinkModel):
             device: 设备
             temperature: 采样温度
             max_tokens: 最大生成 token 数
-            window_size: 历史窗口大小
+            state_dim: 状态维度
+            action_dim: 动作维度
             verbose: 是否打印 prompt，0 不打印，1 完整打印
-        """
-        self._window_size = window_size
 
+        Note:
+            window_size 由 strategy 传入，通过 numeral 中的 context_dict 获取
+        """
         # 占位符属性，与 DTStrategy 兼容
         self._target_return = 0.0
         self._scale = 1.0
@@ -55,6 +60,8 @@ class AuctionNetThinkModel(ThinkModel):
             device=device,
             temperature=temperature,
             max_tokens=max_tokens,
+            state_dim=state_dim,
+            action_dim=action_dim,
             verbose=verbose,
         )
 
@@ -100,7 +107,7 @@ class AuctionNetThinkModel(ThinkModel):
 
     def _format_user_prompt(self, context_dict: Dict[str, Any]) -> str:
         """根据 context_dict 构建用户 prompt"""
-        window_size = self._window_size
+        window_size = context_dict.get('window_size', 20)
         num_timesteps = context_dict.get('num_timesteps', 48)
 
         # 获取历史列表
@@ -116,7 +123,7 @@ class AuctionNetThinkModel(ThinkModel):
         start_idx = max(0, num_history - actual_window)
 
         # 切片历史数据
-        pacer_list = history_pacer[start_idx:num_history]
+        pacer_list = [float(p.flatten()[0]) for p in history_pacer[start_idx:num_history]]
         pv_num_list = history_pv_num[start_idx:num_history]
         conversion_list = history_conversion[start_idx:num_history]
         total_cost_list = history_total_cost[start_idx:num_history]
@@ -158,7 +165,7 @@ class AuctionNetThinkModel(ThinkModel):
             bid_list=pacer_str,
         )
 
-    def _parse_response(self, response: str) -> int:
+    def _parse_response(self, response: str) -> np.ndarray:
         """
         解析 LLM 响应，提取方向值
 
@@ -171,7 +178,7 @@ class AuctionNetThinkModel(ThinkModel):
             response: LLM 的原始响应
 
         Returns:
-            direction: -1, 0, 或 1
+            direction: 一维 numpy array，包含 -1, 0, 或 1
         """
         import re
 
@@ -180,15 +187,15 @@ class AuctionNetThinkModel(ThinkModel):
         # 尝试从 <answer> 标签中提取 -1/0/1
         answer_match = re.search(r'<answer>\s*(-?1|0)\s*</answer>', response)
         if answer_match:
-            return int(answer_match.group(1))
+            return np.array([int(answer_match.group(1))])
 
         # 如果没有找到 answer 标签，尝试直接匹配 -1/0/1
         direction_match = re.search(r'\b(-1|0|1)\b', response)
         if direction_match:
-            return int(direction_match.group(1))
+            return np.array([int(direction_match.group(1))])
 
         # 默认返回 0
-        return 0
+        return np.array([0])
 
     def _get_system_prompt(self) -> str:
         """获取 system prompt"""

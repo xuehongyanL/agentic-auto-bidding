@@ -10,6 +10,9 @@ NORMALIZE_DICT_PATH = '/DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119
 
 
 def main():
+    # action_dim: pacer 向量维度，1 表示标量
+    action_dim = 1
+
     with open(NORMALIZE_DICT_PATH, 'rb') as f:
         normalize_dict = pickle.load(f)
 
@@ -18,7 +21,7 @@ def main():
     model = DTModel(
         model_path='/DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/500000.pt',
         state_dim=16,
-        act_dim=1,
+        action_dim=action_dim,
         device='cpu',
         hidden_size=512,
         n_layer=8,

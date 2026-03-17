@@ -23,10 +23,11 @@ class DecisionEmbeddingLayer(nn.Module):
     - 序列结构：{R_{t-L}, s_{t-L}, a_{t-L}, ..., R_t, s_t}
     """
 
-    def __init__(self, llm_embedding_dim: int = 896, state_dim: int = 16, device: str = 'cuda'):
+    def __init__(self, llm_embedding_dim: int = 896, state_dim: int = 16, action_dim: int = 1, device: str = 'cuda'):
         super().__init__()
         self._embed_dim = llm_embedding_dim
         self._state_dim = state_dim
+        self._action_dim = action_dim
         self._device = device
         # 将所有参数移动到指定设备
         self.to(device)
@@ -40,9 +41,9 @@ class DecisionEmbeddingLayer(nn.Module):
             nn.Linear(self._embed_dim, self._embed_dim),
         )
 
-        # 动作 MLP: [1] -> [embed_dim]
+        # 动作 MLP: [action_dim] -> [embed_dim]
         self.action_mlp = nn.Sequential(
-            nn.Linear(1, self._embed_dim),
+            nn.Linear(self._action_dim, self._embed_dim),
             nn.GELU(),
             nn.Linear(self._embed_dim, self._embed_dim),
             nn.GELU(),
@@ -119,12 +120,12 @@ class DecisionEmbeddingLayer(nn.Module):
 class ActionHead(nn.Module):
     """从 LLM 隐藏状态预测动作"""
 
-    def __init__(self, hidden_size: int, act_dim: int = 1):
+    def __init__(self, hidden_size: int, action_dim: int = 1):
         super().__init__()
         self.fc = nn.Sequential(
             nn.Linear(hidden_size, hidden_size // 2),
             nn.GELU(),
-            nn.Linear(hidden_size // 2, act_dim),
+            nn.Linear(hidden_size // 2, action_dim),
         )
 
     def forward(self, last_hidden_state: torch.Tensor) -> torch.Tensor:
@@ -133,7 +134,7 @@ class ActionHead(nn.Module):
             last_hidden_state: [batch, seq_len, hidden_size]
 
         Returns:
-            action: [batch, act_dim]
+            action: [batch, action_dim]
         """
         # 取最后一个有效位置的隐藏状态
         return self.fc(last_hidden_state[:, -1, :])
@@ -164,9 +165,8 @@ class ActModel(BaseModel, nn.Module):
         self,
         model_path: str,
         model_type: str = 'transformers',
-        llm_embedding_dim: int = 896,
         state_dim: int = 16,
-        act_dim: int = 1,
+        action_dim: int = 1,
         device: str = 'cuda',
         temperature: float = 0.0,
         max_tokens: int = 1024,
@@ -180,9 +180,8 @@ class ActModel(BaseModel, nn.Module):
         self._device = device
         self._temperature = temperature
         self._max_tokens = max_tokens
-        self._llm_embedding_dim = llm_embedding_dim
         self._state_dim = state_dim
-        self._act_dim = act_dim
+        self._action_dim = action_dim
 
         # 初始化归一化参数（保持在 CPU 上用 numpy 操作，避免设备转换开销）
         if state_mean is None:
@@ -195,20 +194,12 @@ class ActModel(BaseModel, nn.Module):
         # 占位符属性，与策略兼容
         self._target_return = 0.0
         self._scale = 1.0
-        self._window_size = 20
 
         # 加载 tokenizer
         from transformers import AutoTokenizer
         self._tokenizer = AutoTokenizer.from_pretrained(
             model_path,
             trust_remote_code=True,
-        )
-
-        # 构建 Decision Embedding Layer
-        self._decision_embedding = DecisionEmbeddingLayer(
-            llm_embedding_dim=llm_embedding_dim,
-            state_dim=state_dim,
-            device=device,
         )
 
         # 获取 LLM backbone
@@ -220,14 +211,25 @@ class ActModel(BaseModel, nn.Module):
         )
         self._llm.eval()
 
+        # 从 LLM 配置中获取 embedding 维度
+        llm_hidden_size = self._llm.config.hidden_size
+
         # 禁用 LLM 的梯度计算
         for param in self._llm.parameters():
             param.requires_grad = False
 
+        # 构建 Decision Embedding Layer
+        self._decision_embedding = DecisionEmbeddingLayer(
+            llm_embedding_dim=llm_hidden_size,
+            state_dim=state_dim,
+            action_dim=action_dim,
+            device=device,
+        )
+
         # 构建 Action Head
         self._action_head = ActionHead(
-            hidden_size=llm_embedding_dim,
-            act_dim=act_dim,
+            hidden_size=llm_hidden_size,
+            action_dim=action_dim,
         )
 
         # 将所有模块移动到指定设备
@@ -267,7 +269,9 @@ class ActModel(BaseModel, nn.Module):
 
         # 前向传播
         action = self._forward(text_prompt, dt_tuple)
-        return None, float(action.detach())
+        # 确保返回 numpy array
+        action = action.detach().cpu().numpy()
+        return None, action
 
     def _forward(self, text_prompt: str, dt_tuple: Tuple) -> torch.Tensor:
         """

@@ -43,3 +43,6 @@ class BaseModel(ABC):
             - action: 动作，可为 None
         """
         pass
+
+    _state_dim: int
+    _action_dim: int

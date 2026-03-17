@@ -149,12 +149,12 @@ class AuctionNetEnv(OfflineEnv):
             return np.array([])
         return self._pValues[self._current_timestep]
 
-    def step(self, pacer: float) -> Dict[str, Any]:
+    def step(self, pacer: np.ndarray) -> Dict[str, Any]:
         """
         执行一步出价
 
         Args:
-            pacer: 出价系数/步调器，用于调整出价策略
+            pacer: 出价系数/步调器，一维 numpy array
 
         Returns:
             包含以下键的字典:
@@ -171,12 +171,15 @@ class AuctionNetEnv(OfflineEnv):
         pValueSigma = self._pValueSigmas[self._current_timestep]
         leastWinningCost = self._leastWinningCosts[self._current_timestep]
 
+        # pacer 是一维 array，取第一个元素
+        pacer_value = float(pacer.flatten()[0])
+
         # 预算不足时不出价
         if self._remaining_budget < self._min_remaining_budget:
             bid = np.zeros(pValue.shape[0])
         else:
             # 出价 = bid * 目标CPA * pValue
-            bid = pacer * self._cpa_constraint * pValue
+            bid = pacer_value * self._cpa_constraint * pValue
 
         # 模拟竞拍
         tick_value, tick_cost, tick_status, tick_conversion = self._simulate_ad_bidding(

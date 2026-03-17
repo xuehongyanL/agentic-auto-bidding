@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
+from agb_core.model.base_model import BaseModel
 from agb_core.strategy.base_strategy import BaseStrategy
 
 
@@ -20,10 +21,14 @@ class AuctionNetBaseStrategy(BaseStrategy):
     所有情况下的 numeral 都是 (原始 dict, DT 多元组)。
     """
 
-    def __init__(self, model, window_size: int = 20):
+    def __init__(self, model: BaseModel, window_size: int = 20):
         super().__init__(model)
 
         self._window_size = window_size
+
+        # 从 model 获取 state_dim 和 action_dim
+        self._state_dim = model._state_dim
+        self._action_dim = model._action_dim
 
         # 历史统计信息
         self._history_bid_mean: List[float] = []
@@ -48,7 +53,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
         self._cpa_constraint: float = 0.0
         self._num_timesteps: int = 0
 
-        self._last_pacer: float = 1.0
+        self._last_pacer: np.ndarray = np.array([1.0])
         self._cum_reward: float = 0.0
 
         # 当前时间步的流量信息
@@ -70,7 +75,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
         self._history_rewards = []
         self._history_scores = [self._model._target_return]
         self._history_pacers = []
-        self._last_pacer = 1.0
+        self._last_pacer = np.array([1.0])
         self._cum_reward = 0.0
 
     def update(self, env_step_result: Dict[str, Any]) -> None:
@@ -100,8 +105,8 @@ class AuctionNetBaseStrategy(BaseStrategy):
 
     def bidding(self) -> tuple:
         """构建二元组 context 并调用模型"""
-        # 为下一步 append 0
-        self._history_actions.append(0.)
+        # 为下一步 append 0 (统一为 array 模式)
+        self._history_actions.append([0.] * self._action_dim)
         self._history_rewards.append(0.)
 
         context_dict = self._build_context()
@@ -110,6 +115,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
         context_dict['budget'] = self._budget
         context_dict['cpa_constraint'] = self._cpa_constraint
         context_dict['num_timesteps'] = self._num_timesteps
+        context_dict['window_size'] = self._window_size
         context_dict['history_pacer'] = self._history_pacers
         context_dict['history_pv_num'] = self._history_pv_num
         context_dict['history_conversion'] = self._history_conversion
@@ -129,12 +135,17 @@ class AuctionNetBaseStrategy(BaseStrategy):
         # LLM 模型返回的直接就是 pacer（0.8/1.0/1.2）
         model_name = self._model.__class__.__name__
         if 'DT' in model_name:
+            # 多维情况：每个维度分别除以 cpa_constraint
+            # 一维情况：直接除以 cpa_constraint
             pacer = action / self._cpa_constraint
         else:
             pacer = action
 
+        # 确保 pacer 是一维 numpy array
+        pacer = pacer.flatten()
+
         self._last_pacer = pacer
-        self._history_actions[-1] = action
+        self._history_actions[-1] = action.tolist()
         self._history_pacers.append(pacer)
         return response, pacer
 
@@ -156,20 +167,22 @@ class AuctionNetBaseStrategy(BaseStrategy):
     def _build_model_input(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """构建模型输入，padding 到 window_size"""
         T = len(self._history_states)
-        state_dim = 16
 
         valid_len = min(T, self._window_size)
         pad_size = self._window_size - valid_len
 
+        # 将 actions 转换为 numpy array（每个元素是 action_dim 维的列表）
+        actions_list = [np.array(a, dtype=np.float32).flatten() for a in self._history_actions]
+        actions = np.array(actions_list, dtype=np.float32)
+
         if pad_size > 0:
             states = np.array(self._history_states, dtype=np.float32)
-            actions = np.array(self._history_actions, dtype=np.float32).reshape(-1, 1)
             rewards = np.array(self._history_rewards, dtype=np.float32).reshape(-1, 1)
             scores = np.array(self._history_scores, dtype=np.float32).reshape(-1, 1)
             timesteps = np.arange(T, dtype=np.int64)
 
-            pad_state = np.zeros((pad_size, state_dim), dtype=np.float32)
-            pad_action = np.zeros((pad_size, 1), dtype=np.float32)
+            pad_state = np.zeros((pad_size, self._state_dim), dtype=np.float32)
+            pad_action = np.zeros((pad_size, self._action_dim), dtype=np.float32)
             pad_reward = np.zeros((pad_size, 1), dtype=np.float32)
             pad_score = np.zeros((pad_size, 1), dtype=np.float32)
             pad_time = np.zeros(pad_size, dtype=np.int64)
@@ -182,7 +195,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
             attention_mask = np.concatenate([np.zeros(pad_size, dtype=np.int64), np.ones(valid_len, dtype=np.int64)], axis=0)
         else:
             states = np.array(self._history_states[-self._window_size:], dtype=np.float32)
-            actions = np.array(self._history_actions[-self._window_size:], dtype=np.float32).reshape(-1, 1)
+            actions = actions[-self._window_size:]
             rewards = np.array(self._history_rewards[-self._window_size:], dtype=np.float32).reshape(-1, 1)
             scores = np.array(self._history_scores[-self._window_size:], dtype=np.float32).reshape(-1, 1)
             timesteps = np.arange(T - self._window_size, T, dtype=np.int64)

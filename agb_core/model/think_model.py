@@ -27,6 +27,8 @@ class ThinkModel(BaseModel):
         device: str = 'cuda',
         temperature: float = 0.0,
         max_tokens: int = 1024,
+        state_dim: int = 16,
+        action_dim: int = 1,
         verbose: int = 0,
     ):
         """
@@ -38,6 +40,8 @@ class ThinkModel(BaseModel):
             device: 设备
             temperature: 采样温度
             max_tokens: 最大生成 token 数
+            state_dim: 状态维度
+            action_dim: 动作维度
             verbose: 是否打印 prompt，0 不打印，1 完整打印
         """
         self._model_path = model_path
@@ -45,6 +49,8 @@ class ThinkModel(BaseModel):
         self._device = device
         self._temperature = temperature
         self._max_tokens = max_tokens
+        self._state_dim = state_dim
+        self._action_dim = action_dim
         self._verbose = verbose
         self._model = None
         self._tokenizer = None
