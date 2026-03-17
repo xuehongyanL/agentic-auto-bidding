@@ -182,6 +182,7 @@ class ActModel(BaseModel, nn.Module):
         self._max_tokens = max_tokens
         self._state_dim = state_dim
         self._action_dim = action_dim
+        self._output_mode = 'pacer'
 
         # 初始化归一化参数（保持在 CPU 上用 numpy 操作，避免设备转换开销）
         if state_mean is None:
@@ -263,9 +264,8 @@ class ActModel(BaseModel, nn.Module):
 
         # 归一化 states
         states = dt_tuple[0]
-        if isinstance(states, np.ndarray):
-            states = (states - self._state_mean.cpu().numpy()) / (self._state_std.cpu().numpy() + 1e-9)
-            dt_tuple = (states, dt_tuple[1], dt_tuple[2], dt_tuple[3], dt_tuple[4], dt_tuple[5])
+        states = (states - self._state_mean.cpu().numpy()) / (self._state_std.cpu().numpy() + 1e-9)
+        dt_tuple = (states, dt_tuple[1], dt_tuple[2], dt_tuple[3], dt_tuple[4], dt_tuple[5])
 
         # 前向传播
         action = self._forward(text_prompt, dt_tuple)

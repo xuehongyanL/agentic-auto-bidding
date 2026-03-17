@@ -51,6 +51,7 @@ class ThinkModel(BaseModel):
         self._max_tokens = max_tokens
         self._state_dim = state_dim
         self._action_dim = action_dim
+        self._output_mode = 'pacer'
         self._verbose = verbose
         self._model = None
         self._tokenizer = None

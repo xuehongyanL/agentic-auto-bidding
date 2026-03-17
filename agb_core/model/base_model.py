@@ -46,3 +46,4 @@ class BaseModel(ABC):
 
     _state_dim: int
     _action_dim: int
+    _output_mode: str

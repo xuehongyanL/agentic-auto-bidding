@@ -45,6 +45,7 @@ class AgentModel(BaseModel):
         # 从 act_model 获取 state_dim 和 action_dim
         self._state_dim = act_model._state_dim
         self._action_dim = act_model._action_dim
+        self._output_mode = act_model._output_mode
 
     def predict(
         self,

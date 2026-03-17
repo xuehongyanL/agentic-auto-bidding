@@ -131,12 +131,8 @@ class AuctionNetBaseStrategy(BaseStrategy):
         # 二元组：(原始 dict, DT 多元组)
         response, action = self._model.predict(None, (context_dict, dt_input))
 
-        # DT 模型返回的是花费金额，需要除以 cpa_constraint 得到 pacer
-        # LLM 模型返回的直接就是 pacer（0.8/1.0/1.2）
-        model_name = self._model.__class__.__name__
-        if 'DT' in model_name:
-            # 多维情况：每个维度分别除以 cpa_constraint
-            # 一维情况：直接除以 cpa_constraint
+        # 根据 output_mode 判断是否需要转换：'price' 需要除以 cpa_constraint 得到 pacer
+        if self._model._output_mode == 'price':
             pacer = action / self._cpa_constraint
         else:
             pacer = action

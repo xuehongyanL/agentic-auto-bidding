@@ -35,6 +35,7 @@ def main():
         scale=config['model']['scale'],
         target_return=config['model']['target_return'],
         block_config=config['model']['block_config'],
+        output_mode=config['model']['output_mode'],
     ).load_model(config['model']['path'])
 
     strategy = AuctionNetBaseStrategy(model, window_size=config['strategy']['window_size'])

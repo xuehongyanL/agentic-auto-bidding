@@ -7,6 +7,7 @@ model:
   n_inner: 2048
   scale: 2000.0
   target_return: 4.0
+  output_mode: price
   normalize_dict_path: /DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/normalize_dict.pkl
   block_config:
     n_ctx: 1024

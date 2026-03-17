@@ -92,6 +92,7 @@ class DTModel(BaseModel, nn.Module):
         n_inner: int,
         scale: float,
         block_config: dict,
+        output_mode: str,
         state_mean: Optional[np.ndarray] = None,
         state_std: Optional[np.ndarray] = None,
     ):
@@ -116,6 +117,7 @@ class DTModel(BaseModel, nn.Module):
         self._device = device
         self._state_dim = state_dim
         self._action_dim = action_dim
+        self._output_mode = output_mode
         self._target_return = target_return
         self._hidden_size = hidden_size
         self._n_layer = n_layer
