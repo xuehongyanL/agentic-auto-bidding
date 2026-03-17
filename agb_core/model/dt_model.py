@@ -5,7 +5,7 @@ DT Model 实现
 """
 
 import math
-from typing import Optional
+from typing import Any, Optional, Tuple
 
 import numpy as np
 import torch
@@ -129,8 +129,8 @@ class DTModel(BaseModel, nn.Module):
             state_mean = np.zeros(state_dim, dtype=np.float32)
         if state_std is None:
             state_std = np.ones(state_dim, dtype=np.float32)
-        self._state_mean = torch.tensor(state_mean, dtype=torch.float32)
-        self._state_std = torch.tensor(state_std, dtype=torch.float32)
+        self._state_mean = state_mean.astype(np.float32)
+        self._state_std = state_std.astype(np.float32)
 
         super().__init__()
 
@@ -197,25 +197,27 @@ class DTModel(BaseModel, nn.Module):
         self.load_state_dict(torch.load(model_path, map_location=self._device))
         self.eval()
 
-    def predict(self, context) -> float:
+    def predict(
+        self,
+        prompt: Optional[str],
+        numeral: Optional[Any] = None
+    ) -> Tuple[Optional[str], Optional[Any]]:
         """
-        根据历史序列预测 pacer
+        根据历史序列预测动作
 
         Args:
-            context: tuple of (states, actions, rewards, curr_score, timesteps, attention_mask)
-                states: 状态序列，形状为 (T, state_dim)
-                actions: 动作序列，形状为 (T, act_dim)
-                rewards: 奖励序列，形状为 (T, 1)
-                curr_score: 当前分数序列，形状为 (T+1, 1)，比 states 多 1
-                timesteps: 时间步序列，形状为 (T,)
-                attention_mask: 注意力掩码，形状为 (T,)，padding位置为0，有效位置为1
+            prompt: 忽略此参数（保留接口兼容性）
+            numeral: 二元组 (context_dict, dt_tuple)
 
         Returns:
-            pacer: 出价系数
+            (None, action): response 为 None，action 是出价系数
         """
-        states, actions, rewards, curr_score, timesteps, attention_mask = context
+        if numeral is None:
+            raise ValueError("DTModel requires numeral input")
+
+        _, (states, actions, rewards, curr_score, timesteps, attention_mask) = numeral
         action = self._get_action(states, actions, rewards, curr_score, timesteps, attention_mask)
-        return float(action)
+        return None, float(action)
 
     def _get_action(self, states, actions, rewards, curr_score, timesteps, attention_mask):
         states = torch.from_numpy(states).to(self._device)
@@ -237,7 +239,7 @@ class DTModel(BaseModel, nn.Module):
 
 
         states = torch.where(attention_mask.view(-1, 1) == 1,
-                             (states - self._state_mean.to(states.device)) / (self._state_std.to(states.device) + 1e-9),
+                             (states - torch.tensor(self._state_mean, device=states.device)) / (torch.tensor(self._state_std, device=states.device) + 1e-9),
                              states)
 
         # print(states, actions, rewards, curr_score, timesteps, attention_mask)

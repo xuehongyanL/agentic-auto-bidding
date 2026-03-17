@@ -44,12 +44,12 @@ class BaseStrategy(ABC):
         pass
 
     @abstractmethod
-    def bidding(self) -> float:
+    def bidding(self) -> tuple:
         """
-        根据当前上下文输出 pacer
+        根据当前上下文输出 response 和 pacer
 
         Returns:
-            pacer: 出价系数
+            (response, pacer): response 是模型的文本响应，pacer 是出价系数
         """
         pass
 

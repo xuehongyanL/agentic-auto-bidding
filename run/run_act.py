@@ -1,23 +1,30 @@
+import pickle
+
 import numpy as np
 
 from agb_auctionnet.env.auctionnet_env import AuctionNetEnv
-from agb_auctionnet.strategy.llm_strategy import AuctionNetLLMStrategy
-from agb_core.model.auction_net_llm_model import AuctionNetLLMModel
+from agb_auctionnet.strategy.base_strategy import AuctionNetBaseStrategy
+from agb_core.model.act_model import ActModel
+
+NORMALIZE_DICT_PATH = '/DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/normalize_dict.pkl'
 
 
 def main():
+    with open(NORMALIZE_DICT_PATH, 'rb') as f:
+        normalize_dict = pickle.load(f)
+
     env = AuctionNetEnv(data_filename='/DATA/xuehy/ad/AAB/data/traffic/period-7.csv')
 
-    window_size = 20
-
-    model = AuctionNetLLMModel(
-        model_path='/DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct',
+    model = ActModel(
+        model_path='/DATA/xuehy/agent/models/Qwen/Qwen2.5-0.5B-Instruct',
         model_type='transformers',
         device='cuda',
-        window_size=window_size,
+        state_mean=normalize_dict['state_mean'],
+        state_std=normalize_dict['state_std'],
     )
+    model.eval()
 
-    strategy = AuctionNetLLMStrategy(model, window_size=window_size)
+    strategy = AuctionNetBaseStrategy(model)
 
     keys = env.keys()
     print(f'Available keys: {len(keys)}')
@@ -35,11 +42,11 @@ def main():
         total_gmv = 0
         total_cost = 0
 
-        for step in range(1, reset_info['num_timesteps'] + 1):
+        for step in range(1, reset_info["num_timesteps"] + 1):
             current_pvalues = env.get_current_pvalues()
             strategy.cpm = float(np.mean(current_pvalues)) if current_pvalues.size > 0 else 0.0
             strategy.cpn = int(current_pvalues.size)
-            pacer = strategy.bidding()
+            _, pacer = strategy.bidding()
             print(f'Step#{step}, pacer={pacer}')
             result = env.step(pacer)
             strategy.update(result)

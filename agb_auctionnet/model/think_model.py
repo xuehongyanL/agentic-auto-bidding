@@ -1,21 +1,21 @@
 """
-AuctionNet LLM Model 实现
+AuctionNet Think Model 实现
 
 基于 Thinking LLM 的出价模型，负责 prompt 构造和 response 解析。
 """
 
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
-from agb_core.model.llm_model import LLMModel
+from agb_core.model.think_model import ThinkModel
 
 
-class AuctionNetLLMModel(LLMModel):
+class AuctionNetThinkModel(ThinkModel):
     """
-    AuctionNet 出价模型
+    AuctionNet 出价模型（Think 模式）
 
-    继承 LLMModel，负责：
-    - prompt 构造（基于业务 context）
-    - LLM response 解析
+    继承 ThinkModel，负责：
+    - prompt 构造（基于 numeral 业务 context）
+    - LLM response 解析为 action
     - context 结构假设和处理
     """
 
@@ -27,17 +27,19 @@ class AuctionNetLLMModel(LLMModel):
         temperature: float = 0.0,
         max_tokens: int = 1024,
         window_size: int = 20,
+        verbose: int = 0,
     ):
         """
-        初始化 AuctionNet LLM Model
+        初始化 AuctionNet Think Model
 
         Args:
             model_path: 本地模型路径
-            model_type: 模型加载方式，可选 'vllm', 'transformers', 'llamacpp'
+            model_type: 模型加载方式，可选 'vllm', 'transformers'
             device: 设备
             temperature: 采样温度
             max_tokens: 最大生成 token 数
             window_size: 历史窗口大小
+            verbose: 是否打印 prompt，0 不打印，1 完整打印
         """
         self._window_size = window_size
 
@@ -53,43 +55,48 @@ class AuctionNetLLMModel(LLMModel):
             device=device,
             temperature=temperature,
             max_tokens=max_tokens,
+            verbose=verbose,
         )
 
-    def predict(self, context) -> float:
+    def predict(
+        self,
+        prompt: Optional[str],
+        numeral: Optional[Any] = None
+    ) -> Tuple[Optional[str], Optional[Any]]:
         """
         根据上下文预测 pacer
 
         Args:
-            context: 二元组 (原始 dict, DT 多元组)
+            prompt: 忽略此参数（保留接口兼容性），prompt 在内部构造
+            numeral: 二元组 (context_dict, dt_input)
                 - 第一个元素：原始 dict（来自 base_strategy 的 _build_context）
                 - 第二个元素：DT 多元组 (states, actions, rewards, curr_score, timesteps, attention_mask)
 
         Returns:
-            pacer: 出价系数
+            (response, action): response 是 LLM 的文本响应，action 是方向值（-1/0/1）
         """
-        # 解包二元组
-        context_dict, dt_input = context
+        # 调用父类获取 response
+        response, _ = super().predict(prompt, numeral)
 
-        prompt = self._build_prompt(context_dict, dt_input)
-        response = super().predict(prompt)
-        pacer = self._parse_response(response)
-        return pacer
+        # 解析 response 得到 action
+        action = self._parse_response(response)
 
-    def _build_prompt(self, context_dict: Dict[str, Any], dt_input: Tuple) -> str:
+        return response, action
+
+    def _build_prompt(self, numeral: Any) -> str:
         """
-        根据上下文构建中文 prompt
+        根据 numeral（二元组）构建 prompt
 
         Args:
-            context_dict: 原始上下文字典，包含历史列表
-            dt_input: DT 多元组 (states, actions, rewards, curr_score, timesteps, attention_mask)
+            numeral: 二元组 (context_dict, dt_input)
 
         Returns:
-            构建好的 prompt 字符串
+            user_prompt 字符串（由 _call_llm 自动应用 chat template）
         """
-        system_prompt = self._SYSTEM_PROMPT
-        user_prompt = self._format_user_prompt(context_dict)
+        # 解包二元组
+        context_dict, dt_input = numeral
 
-        return f'<|system|>\n{system_prompt}<|end|>\n<|user|>\n{user_prompt}<|end|>\n<|assistant|>\n'
+        return self._format_user_prompt(context_dict)
 
     def _format_user_prompt(self, context_dict: Dict[str, Any]) -> str:
         """根据 context_dict 构建用户 prompt"""
@@ -151,58 +158,20 @@ class AuctionNetLLMModel(LLMModel):
             bid_list=pacer_str,
         )
 
-    def _format_dt_input(self, dt_input: Tuple) -> str:
+    def _parse_response(self, response: str) -> int:
         """
-        将 DT 多元组格式化为字符串
+        解析 LLM 响应，提取方向值
 
-        Args:
-            dt_input: DT 多元组 (states, actions, rewards, curr_score, timesteps, attention_mask)
-
-        Returns:
-            格式化的 DT 上下文字符串
-        """
-        states, actions, rewards, curr_score, timesteps, attention_mask = dt_input
-        lines = []
-        lines.append(f'- states shape: {states.shape}')
-        lines.append(f'- actions shape: {actions.shape}')
-        lines.append(f'- rewards shape: {rewards.shape}')
-        lines.append(f'- curr_score: {curr_score[-1][0] if len(curr_score) > 0 else 0:.4f}')
-        lines.append(f'- timesteps: {list(timesteps)}')
-        lines.append(f'- attention_mask: {list(attention_mask)}')
-        return '\n'.join(lines)
-
-    def _format_context(self, context: Dict[str, Any]) -> str:
-        """
-        将上下文字典格式化为字符串
-
-        Args:
-            context: 决策上下文字典
-
-        Returns:
-            格式化的上下文字符串
-        """
-        lines = []
-        for key, value in context.items():
-            if isinstance(value, float):
-                lines.append(f'- {key}: {value:.4f}')
-            else:
-                lines.append(f'- {key}: {value}')
-        return '\n'.join(lines)
-
-    def _parse_response(self, response: str) -> float:
-        """
-        解析 LLM 响应，提取 pacer 值
-
-        LLM 输出 -1/0/1，对应：
-        - -1 → 0.8 (降低出价)
-        - 0 → 1.0 (保持)
-        - 1 → 1.2 (提高出价)
+        LLM 输出 -1/0/1：
+        - -1 → 降低出价
+        - 0 → 保持
+        - 1 → 提高出价
 
         Args:
             response: LLM 的原始响应
 
         Returns:
-            pacer: 出价系数
+            direction: -1, 0, 或 1
         """
         import re
 
@@ -211,27 +180,19 @@ class AuctionNetLLMModel(LLMModel):
         # 尝试从 <answer> 标签中提取 -1/0/1
         answer_match = re.search(r'<answer>\s*(-?1|0)\s*</answer>', response)
         if answer_match:
-            direction = int(answer_match.group(1))
-            if direction == -1:
-                return 0.8
-            elif direction == 0:
-                return 1.0
-            elif direction == 1:
-                return 1.2
+            return int(answer_match.group(1))
 
         # 如果没有找到 answer 标签，尝试直接匹配 -1/0/1
         direction_match = re.search(r'\b(-1|0|1)\b', response)
         if direction_match:
-            direction = int(direction_match.group(1))
-            if direction == -1:
-                return 0.8
-            elif direction == 0:
-                return 1.0
-            elif direction == 1:
-                return 1.2
+            return int(direction_match.group(1))
 
-        # 默认返回 1.0
-        return 1.0
+        # 默认返回 0
+        return 0
+
+    def _get_system_prompt(self) -> str:
+        """获取 system prompt"""
+        return self._SYSTEM_PROMPT
 
     _SYSTEM_PROMPT = '''
 You are an auto-bidding agent determining the optimal bidding parameter for the advertiser. There are 48 timesteps of a day, the aim is to maximize the total acquired number of conversions with a lower realized CPA.
@@ -253,26 +214,6 @@ As a part of summarization, you need to output the latest timestep's cpa ratio =
 
 After your summarization and reasoning, you MUST output the direction in <answer></answer> tags with only three choices at the end of your response:
 - <answer>1</answer> indicates you are sure increasing the bidding parameter is better
-- <answer>-1</answer> indicates you are sure decreasing the parameter is better
-- <answer>0</answer> indicates you are uncertain about the optimal adjustment direction.
-'''
-    _USER_PROMPT_EXAMPLE = '''
-The advertiser's budget is 2850 with a CPA constraint 8. Its historical 4 timesteps' performance change along with time (i.e., from timestep 31 to timestep 34) are:
- timesteps remaining ratio: [0.354, 0.333, 0.312, 0.292],
- budget remaining ratio: [0.953, 0.953, 0.953, 0.953],
- predicted total impression value: [28, 54, 46, 44],
- achieved conversions of each step: [0, 0, 0, 0].
-From the 0-th timestep to now, the total acquired conversions is 25.
-For each historical timestep, their corresponding bidding parameter is: [6.845, 6.967, 7.063, 7.238].
-
-You should summarize the history and then reason for the best future adjustment direction.
-Here are some basic knowledge:
-1. You should carefully and sufficiently spend your budget but do not spend all the budget too early;
-2. The realized CPA is calculated as (total spent budget / total acquired number of conversions), where total spent budget = budget * (1 - current budget remaining ratio). If you think the realized CPA would be bigger than the CPA constraint when spent all the budget, you should decrease the bidding parameter.
-As a part of summarization, you need to output the latest timestep's cpa ratio = realized_cpa/cpa_constraint in <ratio></ratio> tags.
-
-After your summarization and reasoning, you MUST output the direction in <answer></answer> tags with only three choices at the end of your response:
-- <answer>1</answer>indicates you are sure increasing the bidding parameter is better
 - <answer>-1</answer> indicates you are sure decreasing the parameter is better
 - <answer>0</answer> indicates you are uncertain about the optimal adjustment direction.
 '''

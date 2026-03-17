@@ -2,9 +2,12 @@
 AuctionNet 基础策略实现
 
 维护历史上下文并调用 model 输出 pacer。
+所有情况下的 numeral 都是 (原始 dict, DT 多元组)。
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
+
+import numpy as np
 
 from agb_core.strategy.base_strategy import BaseStrategy
 
@@ -14,11 +17,15 @@ class AuctionNetBaseStrategy(BaseStrategy):
     AuctionNet 数据集的基础策略实现
 
     维护历史统计信息作为上下文，调用 model 预测 pacer。
+    所有情况下的 numeral 都是 (原始 dict, DT 多元组)。
     """
 
-    def __init__(self, model):
+    def __init__(self, model, window_size: int = 20):
         super().__init__(model)
 
+        self._window_size = window_size
+
+        # 历史统计信息
         self._history_bid_mean: List[float] = []
         self._history_pvalue_mean: List[float] = []
         self._history_pv_num: List[int] = []
@@ -28,9 +35,25 @@ class AuctionNetBaseStrategy(BaseStrategy):
         self._history_least_winning_cost_mean: List[float] = []
         self._history_total_cost: List[float] = []
 
+        # DT 相关历史记录
+        self._history_states: list = []
+        self._history_actions: list = []
+        self._history_rewards: list = []
+        self._history_scores: list = []
+
+        # LLM 策略需要的 pacer 历史
+        self._history_pacers: list = []
+
         self._budget: float = 0.0
         self._cpa_constraint: float = 0.0
         self._num_timesteps: int = 0
+
+        self._last_pacer: float = 1.0
+        self._cum_reward: float = 0.0
+
+        # 当前时间步的流量信息
+        self.cpm: float = 0.0
+        self.cpn: int = 0
 
     def reset(self) -> None:
         self._history_bid_mean = []
@@ -42,10 +65,30 @@ class AuctionNetBaseStrategy(BaseStrategy):
         self._history_least_winning_cost_mean = []
         self._history_total_cost = []
 
+        self._history_states = []
+        self._history_actions = []
+        self._history_rewards = []
+        self._history_scores = [self._model._target_return]
+        self._history_pacers = []
+        self._last_pacer = 1.0
+        self._cum_reward = 0.0
+
     def update(self, env_step_result: Dict[str, Any]) -> None:
         pv_num = env_step_result.get('pv_num', 1)
-        conversion = env_step_result.get('conversion', 0)
-        conversion_mean = conversion / pv_num if pv_num > 0 else 0.0
+        conversion_sum = env_step_result.get('conversion', 0.0)
+        conversion_mean = conversion_sum / pv_num if pv_num > 0 else 0.0
+
+        # _cum_reward 累加总和，用于 curr_score 计算
+        self._cum_reward += conversion_sum
+
+        # _history_actions 和 _history_rewards 的 append 已在 bidding() 中处理
+        # 这里只需要更新 rewards 的最后一个位置
+        self._history_rewards[-1] = conversion_mean
+
+        curr_score = self._calc_curr_score()
+        self._history_scores.append(curr_score)
+
+        # 更新历史统计信息
         self._history_bid_mean.append(env_step_result.get('bid_mean', 0))
         self._history_pvalue_mean.append(env_step_result.get('pvalue_mean', 0))
         self._history_pv_num.append(pv_num)
@@ -55,9 +98,118 @@ class AuctionNetBaseStrategy(BaseStrategy):
         self._history_least_winning_cost_mean.append(env_step_result.get('least_winning_cost_mean', 0))
         self._history_total_cost.append(env_step_result.get('total_cost', 0))
 
-    def bidding(self) -> float:
-        context = self._build_context()
-        return self._model.predict(context)
+    def bidding(self) -> tuple:
+        """构建二元组 context 并调用模型"""
+        # 为下一步 append 0
+        self._history_actions.append(0.)
+        self._history_rewards.append(0.)
+
+        context_dict = self._build_context()
+
+        # 添加 LLM 策略需要的额外字段
+        context_dict['budget'] = self._budget
+        context_dict['cpa_constraint'] = self._cpa_constraint
+        context_dict['num_timesteps'] = self._num_timesteps
+        context_dict['history_pacer'] = self._history_pacers
+        context_dict['history_pv_num'] = self._history_pv_num
+        context_dict['history_conversion'] = self._history_conversion
+        context_dict['history_total_cost'] = self._history_total_cost
+        context_dict['total_conversions'] = sum(self._history_conversion) if self._history_conversion else 0
+
+        state = self._context_to_state(context_dict)
+        self._history_states.append(state)
+
+        # 构建 DT 多元组
+        dt_input = self._build_model_input()
+
+        # 二元组：(原始 dict, DT 多元组)
+        response, action = self._model.predict(None, (context_dict, dt_input))
+
+        # DT 模型返回的是花费金额，需要除以 cpa_constraint 得到 pacer
+        # LLM 模型返回的直接就是 pacer（0.8/1.0/1.2）
+        model_name = self._model.__class__.__name__
+        if 'DT' in model_name:
+            pacer = action / self._cpa_constraint
+        else:
+            pacer = action
+
+        self._last_pacer = pacer
+        self._history_actions[-1] = action
+        self._history_pacers.append(pacer)
+        return response, pacer
+
+    def _calc_curr_score(self) -> float:
+        """计算当前 score"""
+        if not self._history_states or self._cum_reward <= 0:
+            return self._model._target_return
+
+        state = self._history_states[-1]
+        budget_left = state[1]
+        curr_cost = self._budget * (1 - budget_left)
+        curr_cpa = curr_cost / (self._cum_reward + 1e-10)
+        curr_coef = self._cpa_constraint / (curr_cpa + 1e-10)
+        curr_penalty_squared = curr_coef ** 2
+        curr_penalty = 1.0 if curr_penalty_squared > 1.0 else curr_coef
+        current_score = curr_penalty * self._cum_reward
+        return float(self._model._target_return - current_score / self._model._scale)
+
+    def _build_model_input(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """构建模型输入，padding 到 window_size"""
+        T = len(self._history_states)
+        state_dim = 16
+
+        valid_len = min(T, self._window_size)
+        pad_size = self._window_size - valid_len
+
+        if pad_size > 0:
+            states = np.array(self._history_states, dtype=np.float32)
+            actions = np.array(self._history_actions, dtype=np.float32).reshape(-1, 1)
+            rewards = np.array(self._history_rewards, dtype=np.float32).reshape(-1, 1)
+            scores = np.array(self._history_scores, dtype=np.float32).reshape(-1, 1)
+            timesteps = np.arange(T, dtype=np.int64)
+
+            pad_state = np.zeros((pad_size, state_dim), dtype=np.float32)
+            pad_action = np.zeros((pad_size, 1), dtype=np.float32)
+            pad_reward = np.zeros((pad_size, 1), dtype=np.float32)
+            pad_score = np.zeros((pad_size, 1), dtype=np.float32)
+            pad_time = np.zeros(pad_size, dtype=np.int64)
+
+            states = np.concatenate([pad_state, states], axis=0)
+            actions = np.concatenate([pad_action, actions], axis=0)
+            rewards = np.concatenate([pad_reward, rewards], axis=0)
+            scores = np.concatenate([pad_score, scores], axis=0)
+            timesteps = np.concatenate([pad_time, timesteps], axis=0)
+            attention_mask = np.concatenate([np.zeros(pad_size, dtype=np.int64), np.ones(valid_len, dtype=np.int64)], axis=0)
+        else:
+            states = np.array(self._history_states[-self._window_size:], dtype=np.float32)
+            actions = np.array(self._history_actions[-self._window_size:], dtype=np.float32).reshape(-1, 1)
+            rewards = np.array(self._history_rewards[-self._window_size:], dtype=np.float32).reshape(-1, 1)
+            scores = np.array(self._history_scores[-self._window_size:], dtype=np.float32).reshape(-1, 1)
+            timesteps = np.arange(T - self._window_size, T, dtype=np.int64)
+            attention_mask = np.ones(self._window_size, dtype=np.int64)
+        return states, actions, rewards, scores, timesteps, attention_mask
+
+    def _context_to_state(self, context: Dict[str, Any]) -> np.ndarray:
+        """将上下文字典转换为模型输入状态向量"""
+        state = np.array([
+            context['time_left'],
+            context['budget_left'],
+            context['historical_bid_mean'],
+            context['last_three_bid_mean'],
+            context['historical_LeastWinningCost_mean'],
+            context['historical_pValues_mean'],
+            context['historical_conversion_mean'],
+            context['historical_xi_mean'],
+            context['last_three_LeastWinningCost_mean'],
+            context['last_three_pValues_mean'],
+            context['last_three_conversion_mean'],
+            context['last_three_xi_mean'],
+            context['current_pValues_mean'],
+            context['current_pv_num'],
+            context['last_three_pv_num_total'],
+            context['historical_pv_num_total'],
+        ], dtype=np.float32)
+        return state
 
     def set_episode_info(self, budget: float, cpa_constraint: float, num_timesteps: int) -> None:
         self._budget = budget

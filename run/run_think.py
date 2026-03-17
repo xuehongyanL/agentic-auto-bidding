@@ -1,36 +1,24 @@
-import pickle
-
 import numpy as np
 
 from agb_auctionnet.env.auctionnet_env import AuctionNetEnv
+from agb_auctionnet.model.think_model import AuctionNetThinkModel
 from agb_auctionnet.strategy.base_strategy import AuctionNetBaseStrategy
-from agb_core.model.dt_model import DTModel
-
-NORMALIZE_DICT_PATH = '/DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/normalize_dict.pkl'
 
 
 def main():
-    with open(NORMALIZE_DICT_PATH, 'rb') as f:
-        normalize_dict = pickle.load(f)
-
     env = AuctionNetEnv(data_filename='/DATA/xuehy/ad/AAB/data/traffic/period-7.csv')
 
-    model = DTModel(
-        model_path='/DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/500000.pt',
-        state_dim=16,
-        act_dim=1,
-        device='cpu',
-        hidden_size=512,
-        n_layer=8,
-        n_head=16,
-        n_inner=2048,
-        state_mean=normalize_dict['state_mean'],
-        state_std=normalize_dict['state_std'],
-        scale=2000.0,
-    )
-    model.eval()
+    window_size = 20
 
-    strategy = AuctionNetBaseStrategy(model)
+    model = AuctionNetThinkModel(
+        model_path='/DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct',
+        model_type='vllm',
+        device='cuda',
+        window_size=window_size,
+        verbose=1,
+    )
+
+    strategy = AuctionNetBaseStrategy(model, window_size=window_size)
 
     keys = env.keys()
     print(f'Available keys: {len(keys)}')
@@ -48,13 +36,27 @@ def main():
         total_gmv = 0
         total_cost = 0
 
-        for step in range(1, reset_info["num_timesteps"] + 1):
+        for step in range(1, reset_info['num_timesteps'] + 1):
             current_pvalues = env.get_current_pvalues()
-            # 注入当前时间步的流量信息到 strategy（必须在 bidding 之前设置）
             strategy.cpm = float(np.mean(current_pvalues)) if current_pvalues.size > 0 else 0.0
             strategy.cpn = int(current_pvalues.size)
-            _, pacer = strategy.bidding()
-            print(f'Step#{step}, pacer={pacer}')
+
+            response, direction = strategy.bidding()  # response 是文本，direction 是 -1/0/1
+
+            # 手动映射为真实 pacer
+            if direction == -1:
+                pacer = 0.8
+            elif direction == 0:
+                pacer = 1.0
+            else:  # direction == 1
+                pacer = 1.2
+
+            # 修改 strategy 内部记录的最近一个 pacer
+            if strategy._history_pacers:
+                strategy._history_pacers[-1] = pacer
+            strategy._last_pacer = pacer
+
+            print(f'Step#{step}, direction={direction}, pacer={pacer}')
             result = env.step(pacer)
             strategy.update(result)
 
