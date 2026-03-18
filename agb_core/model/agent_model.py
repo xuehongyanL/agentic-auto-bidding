@@ -21,7 +21,7 @@ class AgentModel(BaseModel):
 
     双输入：
     - prompt: None（忽略，由 Think 模型内部构造）
-    - numeral: 二元组 (context_dict, dt_tuple)
+    - numeral: 二元组 (context_dict, Trajectory)
 
     双输出：
     - response: Think 模型的文本响应
@@ -59,7 +59,7 @@ class AgentModel(BaseModel):
 
         Args:
             prompt: 忽略此参数（保留接口兼容性）
-            numeral: 二元组 (context_dict, dt_tuple)
+            numeral: 二元组 (context_dict, Trajectory)
 
         Returns:
             (response, action): response 是 Think 模型的文本响应，action 是 Act 模型预测的动作

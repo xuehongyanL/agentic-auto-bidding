@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from agb_core.data.trajectory import Trajectory
 from agb_core.model.base_model import BaseModel
 
 
@@ -208,7 +209,7 @@ class DTModel(BaseModel, nn.Module):
 
         Args:
             prompt: 忽略此参数（保留接口兼容性）
-            numeral: 二元组 (context_dict, dt_tuple)
+            numeral: 二元组 (context_dict, Trajectory)
 
         Returns:
             (None, action): response 为 None，action 是出价系数
@@ -216,18 +217,18 @@ class DTModel(BaseModel, nn.Module):
         if numeral is None:
             raise ValueError("DTModel requires numeral input")
 
-        _, (states, actions, rtgs, timesteps, attention_mask) = numeral
-        action = self._get_action(states, actions, rtgs, timesteps, attention_mask)
+        _, trajectory = numeral
+        action = self._get_action(trajectory)
         # 确保返回 numpy array
         action = action.detach().cpu().numpy()
         return None, action
 
-    def _get_action(self, states, actions, rtgs, timesteps, attention_mask):
-        states = torch.from_numpy(states).to(self._device)
-        actions = torch.from_numpy(actions).to(self._device)
-        rtgs = torch.from_numpy(rtgs).to(self._device)
-        timesteps = torch.from_numpy(timesteps).to(self._device)
-        attention_mask = torch.from_numpy(attention_mask).to(self._device)
+    def _get_action(self, trajectory: Trajectory):
+        states = torch.from_numpy(trajectory.states).to(self._device)
+        actions = torch.from_numpy(trajectory.actions).to(self._device)
+        rtgs = torch.from_numpy(trajectory.rtgs).to(self._device)
+        timesteps = torch.from_numpy(trajectory.timesteps).to(self._device)
+        attention_mask = torch.from_numpy(trajectory.attention_mask).to(self._device)
 
         states = states.unsqueeze(0)
         actions = actions.unsqueeze(0)

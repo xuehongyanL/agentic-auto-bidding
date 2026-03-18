@@ -7,7 +7,7 @@ saved_model/
 log/
 
 # Data
-data/
+/data/
 
 # Claude Code
 CLAUDE.md

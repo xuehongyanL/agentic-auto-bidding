@@ -2,13 +2,14 @@
 AuctionNet 基础策略实现
 
 维护历史上下文并调用 model 输出 pacer。
-所有情况下的 numeral 都是 (原始 dict, DT 多元组)。
+所有情况下的 numeral 都是 (原始 dict, Trajectory)。
 """
 
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
+from agb_core.data.trajectory import Trajectory
 from agb_core.model.base_model import BaseModel
 from agb_core.strategy.base_strategy import BaseStrategy
 
@@ -18,7 +19,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
     AuctionNet 数据集的基础策略实现
 
     维护历史统计信息作为上下文，调用 model 预测 pacer。
-    所有情况下的 numeral 都是 (原始 dict, DT 多元组)。
+    所有情况下的 numeral 都是 (原始 dict, Trajectory)。
     """
 
     def __init__(
@@ -167,7 +168,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
         current_score = curr_penalty * self._cum_reward
         return float(self._model._target_rtg - current_score / self._model._scale)
 
-    def _build_model_input(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def _build_model_input(self) -> Trajectory:
         """构建模型输入，padding 到 window_size"""
         T = len(self._history_states)
 
@@ -206,7 +207,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
         valid_mask = np.max(attention_mask, axis=-1, keepdims=True)  # (window_size, 1)
         states = np.where(valid_mask == 1, (states - self._state_mean) / (self._state_std + 1e-9), states)
 
-        return states, actions, rtgs, timesteps, attention_mask
+        return Trajectory(states, actions, rtgs, timesteps, attention_mask)
 
     def _context_to_state(self, context: Dict[str, Any]) -> np.ndarray:
         """将上下文字典转换为模型输入状态向量"""

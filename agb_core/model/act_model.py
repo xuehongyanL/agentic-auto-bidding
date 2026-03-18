@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from agb_core.data.trajectory import Trajectory
 from agb_core.model.base_model import BaseModel
 
 
@@ -59,13 +60,13 @@ class DecisionEmbeddingLayer(nn.Module):
             nn.Linear(self._embed_dim, self._embed_dim),
         )
 
-    def forward(self, dt_tuple: Tuple) -> torch.Tensor:
+    def forward(self, trajectory: Trajectory) -> torch.Tensor:
         """
         按照论文结构: {R_{t-L}, s_{t-L}, a_{t-L}, ..., R_t, s_t}
         每个元素（RTG/状态/动作）整体投影为一个 token
 
         Args:
-            dt_tuple: (states, actions, rtgs, timesteps, attention_mask)
+            trajectory: Trajectory namedtuple
                 states: [T, state_dim]
                 actions: [T, action_dim]
                 rtgs: [T+1, 1]
@@ -75,7 +76,9 @@ class DecisionEmbeddingLayer(nn.Module):
         Returns:
             dt_embeddings: [1, seq_len, embed_dim]
         """
-        states, actions, rtgs, timesteps, attention_mask = dt_tuple
+        states = trajectory.states
+        actions = trajectory.actions
+        rtgs = trajectory.rtgs
 
         # 转换为 tensor 并移动到设备上
         states = torch.from_numpy(states).float().to(self._device)
@@ -148,7 +151,7 @@ class ActModel(BaseModel, nn.Module):
 
     双输入：
     - prompt: str, 构建好的文本 prompt
-    - numeral: 二元组 (context_dict, dt_tuple)
+    - numeral: 二元组 (context_dict, Trajectory)
 
     双输出：
     - response: None
@@ -246,9 +249,9 @@ class ActModel(BaseModel, nn.Module):
 
         Args:
             prompt: 文本 prompt（忽略）
-            numeral: 二元组 (context_dict, dt_tuple)
+            numeral: 二元组 (context_dict, Trajectory)
                 - context_dict: 原始 dict（用于兼容接口，ActModel 不使用）
-                - dt_tuple: (states, actions, rtgs, timesteps, attention_mask)
+                - trajectory: Trajectory namedtuple
 
         Returns:
             (None, action): response 为 None，action 是预测的 pacer 值
@@ -258,27 +261,26 @@ class ActModel(BaseModel, nn.Module):
 
         text_prompt = prompt if prompt is not None else ""
 
-        # 解包二元组 (context_dict, dt_input)
-        context_dict, dt_tuple = numeral
+        # 解包二元组 (context_dict, Trajectory)
+        _, trajectory = numeral
 
         # 归一化 states
-        states = dt_tuple[0]
-        states = (states - self._state_mean.cpu().numpy()) / (self._state_std.cpu().numpy() + 1e-9)
-        dt_tuple = (states, dt_tuple[1], dt_tuple[2], dt_tuple[3], dt_tuple[4])
+        states = (trajectory.states - self._state_mean.cpu().numpy()) / (self._state_std.cpu().numpy() + 1e-9)
+        trajectory = trajectory._replace(states=states)
 
         # 前向传播
-        action = self._forward(text_prompt, dt_tuple)
+        action = self._forward(text_prompt, trajectory)
         # 确保返回 numpy array
         action = action.detach().cpu().numpy()
         return None, action
 
-    def _forward(self, text_prompt: str, dt_tuple: Tuple) -> torch.Tensor:
+    def _forward(self, text_prompt: str, trajectory: Trajectory) -> torch.Tensor:
         """
         前向传播
 
         Args:
             text_prompt: str
-            dt_tuple: (states, actions, rtgs, timesteps, attention_mask)
+            trajectory: Trajectory namedtuple
 
         Returns:
             action: tensor
@@ -286,8 +288,8 @@ class ActModel(BaseModel, nn.Module):
         # 1. 文本 -> Token Embeddings
         text_embeds = self._tokenize(text_prompt)
 
-        # 2. DT tuple -> Decision Embeddings
-        dt_embeds = self._decision_embedding(dt_tuple)
+        # 2. Trajectory -> Decision Embeddings
+        dt_embeds = self._decision_embedding(trajectory)
 
         # 3. 序列维度拼接
         combined_embeds = torch.cat([text_embeds, dt_embeds], dim=1)
@@ -325,13 +327,13 @@ class ActModel(BaseModel, nn.Module):
 
         return token_embeddings
 
-    def get_text_response(self, text_prompt: str, dt_tuple: Tuple) -> str:
+    def get_text_response(self, text_prompt: str, trajectory: Trajectory) -> str:
         """
         获取 LLM 的文本响应（用于推理过程）
 
         Args:
             text_prompt: str
-            numeral: 二元组 (context_dict, dt_input)
+            trajectory: Trajectory namedtuple
 
         Returns:
             text_response: str

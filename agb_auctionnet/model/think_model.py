@@ -75,9 +75,9 @@ class AuctionNetThinkModel(ThinkModel):
 
         Args:
             prompt: 忽略此参数（保留接口兼容性），prompt 在内部构造
-            numeral: 二元组 (context_dict, dt_input)
+            numeral: 二元组 (context_dict, Trajectory)
                 - 第一个元素：原始 dict（来自 base_strategy 的 _build_context）
-                - 第二个元素：DT 多元组 (states, actions, rtgs, timesteps, attention_mask)
+                - 第二个元素：Trajectory namedtuple (states, actions, rtgs, timesteps, attention_mask)
 
         Returns:
             (response, action): response 是 LLM 的文本响应，action 是方向值（-1/0/1）
@@ -95,7 +95,7 @@ class AuctionNetThinkModel(ThinkModel):
         根据 numeral（二元组）构建 prompt
 
         Args:
-            numeral: 二元组 (context_dict, dt_input)
+            numeral: 二元组 (context_dict, Trajectory)
 
         Returns:
             user_prompt 字符串（由 _call_llm 自动应用 chat template）
