@@ -65,10 +65,9 @@ class DecisionEmbeddingLayer(nn.Module):
         每个元素（RTG/状态/动作）整体投影为一个 token
 
         Args:
-            dt_tuple: (states, actions, rewards, curr_score, timesteps, attention_mask)
+            dt_tuple: (states, actions, curr_score, timesteps, attention_mask)
                 states: [T, state_dim]
                 actions: [T, 1]
-                rewards: [T, 1]  # 忽略
                 curr_score: [T+1, 1]
                 timesteps: [T]
                 attention_mask: [T]
@@ -76,7 +75,7 @@ class DecisionEmbeddingLayer(nn.Module):
         Returns:
             dt_embeddings: [1, seq_len, embed_dim]
         """
-        states, actions, rewards, curr_score, timesteps, attention_mask = dt_tuple
+        states, actions, curr_score, timesteps, attention_mask = dt_tuple
 
         # 转换为 tensor 并移动到设备上
         states = torch.from_numpy(states).float().to(self._device)
@@ -249,7 +248,7 @@ class ActModel(BaseModel, nn.Module):
             prompt: 文本 prompt（忽略）
             numeral: 二元组 (context_dict, dt_tuple)
                 - context_dict: 原始 dict（用于兼容接口，ActModel 不使用）
-                - dt_tuple: (states, actions, rewards, curr_score, timesteps, attention_mask)
+                - dt_tuple: (states, actions, curr_score, timesteps, attention_mask)
 
         Returns:
             (None, action): response 为 None，action 是预测的 pacer 值
@@ -265,7 +264,7 @@ class ActModel(BaseModel, nn.Module):
         # 归一化 states
         states = dt_tuple[0]
         states = (states - self._state_mean.cpu().numpy()) / (self._state_std.cpu().numpy() + 1e-9)
-        dt_tuple = (states, dt_tuple[1], dt_tuple[2], dt_tuple[3], dt_tuple[4], dt_tuple[5])
+        dt_tuple = (states, dt_tuple[1], dt_tuple[2], dt_tuple[3], dt_tuple[4])
 
         # 前向传播
         action = self._forward(text_prompt, dt_tuple)
@@ -279,7 +278,7 @@ class ActModel(BaseModel, nn.Module):
 
         Args:
             text_prompt: str
-            dt_tuple: (states, actions, rewards, curr_score, timesteps, attention_mask)
+            dt_tuple: (states, actions, curr_score, timesteps, attention_mask)
 
         Returns:
             action: tensor

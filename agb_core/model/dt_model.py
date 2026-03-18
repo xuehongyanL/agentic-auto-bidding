@@ -144,11 +144,9 @@ class DTModel(BaseModel, nn.Module):
         self.transformer = nn.ModuleList([Block(self._block_config) for _ in range(self._block_config['n_layer'])])
         self.embed_timestep = nn.Embedding(96, self._time_dim)
         self.embed_return = nn.Linear(1, self._hidden_size)
-        self.embed_reward = nn.Linear(1, self._hidden_size)
         self.embed_state = nn.Linear(self._state_dim, self._hidden_size)
         self.embed_action = nn.Linear(self._action_dim, self._hidden_size)
         self.trans_return = nn.Linear(self._time_dim + self._hidden_size, self._hidden_size)
-        self.trans_reward = nn.Linear(self._time_dim + self._hidden_size, self._hidden_size)
         self.trans_state = nn.Linear(self._time_dim + self._hidden_size, self._hidden_size)
         self.trans_action = nn.Linear(self._time_dim + self._hidden_size, self._hidden_size)
         self.embed_ln = nn.LayerNorm(self._hidden_size)
@@ -203,23 +201,21 @@ class DTModel(BaseModel, nn.Module):
         if numeral is None:
             raise ValueError("DTModel requires numeral input")
 
-        _, (states, actions, rewards, curr_score, timesteps, attention_mask) = numeral
-        action = self._get_action(states, actions, rewards, curr_score, timesteps, attention_mask)
+        _, (states, actions, curr_score, timesteps, attention_mask) = numeral
+        action = self._get_action(states, actions, curr_score, timesteps, attention_mask)
         # 确保返回 numpy array
         action = action.detach().cpu().numpy()
         return None, action
 
-    def _get_action(self, states, actions, rewards, curr_score, timesteps, attention_mask):
+    def _get_action(self, states, actions, curr_score, timesteps, attention_mask):
         states = torch.from_numpy(states).to(self._device)
         actions = torch.from_numpy(actions).to(self._device)
-        rewards = torch.from_numpy(rewards).to(self._device)
         curr_score = torch.from_numpy(curr_score).to(self._device)
         timesteps = torch.from_numpy(timesteps).to(self._device)
         attention_mask = torch.from_numpy(attention_mask).to(self._device)
 
         states = states.unsqueeze(0)
         actions = actions.unsqueeze(0)
-        rewards = rewards.unsqueeze(0)
         curr_score = curr_score.unsqueeze(0)
         timesteps = timesteps.unsqueeze(0)
         attention_mask = attention_mask.unsqueeze(0)
@@ -232,23 +228,20 @@ class DTModel(BaseModel, nn.Module):
                              (states - self._state_mean) / (self._state_std + 1e-9),
                              states)
 
-        # print(states, actions, rewards, curr_score, timesteps, attention_mask)
+        # print(states, actions, curr_score, timesteps, attention_mask)
 
         state_embeddings = self.embed_state(states)
         action_embeddings = self.embed_action(actions)
         returns_embeddings = self.embed_return(curr_score)
-        rewards_embeddings = self.embed_reward(rewards)
         time_embeddings = self.embed_timestep(timesteps)
 
         state_embeddings = torch.cat((state_embeddings, time_embeddings), dim=-1)
         action_embeddings = torch.cat((action_embeddings, time_embeddings), dim=-1)
         returns_embeddings = torch.cat((returns_embeddings, time_embeddings), dim=-1)
-        rewards_embeddings = torch.cat((rewards_embeddings, time_embeddings), dim=-1)
 
         state_embeddings = self.trans_state(state_embeddings)
         action_embeddings = self.trans_action(action_embeddings)
         returns_embeddings = self.trans_return(returns_embeddings)
-        rewards_embeddings = self.trans_reward(rewards_embeddings)
 
         stacked_inputs = torch.stack(
             (returns_embeddings, state_embeddings, action_embeddings), dim=1

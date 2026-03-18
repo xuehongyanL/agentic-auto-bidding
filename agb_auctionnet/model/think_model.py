@@ -77,7 +77,7 @@ class AuctionNetThinkModel(ThinkModel):
             prompt: 忽略此参数（保留接口兼容性），prompt 在内部构造
             numeral: 二元组 (context_dict, dt_input)
                 - 第一个元素：原始 dict（来自 base_strategy 的 _build_context）
-                - 第二个元素：DT 多元组 (states, actions, rewards, curr_score, timesteps, attention_mask)
+                - 第二个元素：DT 多元组 (states, actions, curr_score, timesteps, attention_mask)
 
         Returns:
             (response, action): response 是 LLM 的文本响应，action 是方向值（-1/0/1）

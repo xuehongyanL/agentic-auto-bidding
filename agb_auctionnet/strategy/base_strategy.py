@@ -43,7 +43,6 @@ class AuctionNetBaseStrategy(BaseStrategy):
         # DT 相关历史记录
         self._history_states: list = []
         self._history_actions: list = []
-        self._history_rewards: list = []
         self._history_scores: list = []
 
         # LLM 策略需要的 pacer 历史
@@ -72,7 +71,6 @@ class AuctionNetBaseStrategy(BaseStrategy):
 
         self._history_states = []
         self._history_actions = []
-        self._history_rewards = []
         self._history_scores = [self._model._target_return]
         self._history_pacers = []
         self._last_pacer = np.array([1.0])
@@ -85,10 +83,6 @@ class AuctionNetBaseStrategy(BaseStrategy):
 
         # _cum_reward 累加总和，用于 curr_score 计算
         self._cum_reward += conversion_sum
-
-        # _history_actions 和 _history_rewards 的 append 已在 bidding() 中处理
-        # 这里只需要更新 rewards 的最后一个位置
-        self._history_rewards[-1] = conversion_mean
 
         curr_score = self._calc_curr_score()
         self._history_scores.append(curr_score)
@@ -107,7 +101,6 @@ class AuctionNetBaseStrategy(BaseStrategy):
         """构建二元组 context 并调用模型"""
         # 为下一步 append 0 (统一为 array 模式)
         self._history_actions.append([0.] * self._action_dim)
-        self._history_rewards.append(0.)
 
         context_dict = self._build_context()
 
@@ -160,7 +153,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
         current_score = curr_penalty * self._cum_reward
         return float(self._model._target_return - current_score / self._model._scale)
 
-    def _build_model_input(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def _build_model_input(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """构建模型输入，padding 到 window_size"""
         T = len(self._history_states)
 
@@ -173,30 +166,26 @@ class AuctionNetBaseStrategy(BaseStrategy):
 
         if pad_size > 0:
             states = np.array(self._history_states, dtype=np.float32)
-            rewards = np.array(self._history_rewards, dtype=np.float32).reshape(-1, 1)
             scores = np.array(self._history_scores, dtype=np.float32).reshape(-1, 1)
             timesteps = np.arange(T, dtype=np.int64)
 
             pad_state = np.zeros((pad_size, self._state_dim), dtype=np.float32)
             pad_action = np.zeros((pad_size, self._action_dim), dtype=np.float32)
-            pad_reward = np.zeros((pad_size, 1), dtype=np.float32)
             pad_score = np.zeros((pad_size, 1), dtype=np.float32)
             pad_time = np.zeros(pad_size, dtype=np.int64)
 
             states = np.concatenate([pad_state, states], axis=0)
             actions = np.concatenate([pad_action, actions], axis=0)
-            rewards = np.concatenate([pad_reward, rewards], axis=0)
             scores = np.concatenate([pad_score, scores], axis=0)
             timesteps = np.concatenate([pad_time, timesteps], axis=0)
             attention_mask = np.concatenate([np.zeros(pad_size, dtype=np.int64), np.ones(valid_len, dtype=np.int64)], axis=0)
         else:
             states = np.array(self._history_states[-self._window_size:], dtype=np.float32)
             actions = actions[-self._window_size:]
-            rewards = np.array(self._history_rewards[-self._window_size:], dtype=np.float32).reshape(-1, 1)
             scores = np.array(self._history_scores[-self._window_size:], dtype=np.float32).reshape(-1, 1)
             timesteps = np.arange(T - self._window_size, T, dtype=np.int64)
             attention_mask = np.ones(self._window_size, dtype=np.int64)
-        return states, actions, rewards, scores, timesteps, attention_mask
+        return states, actions, scores, timesteps, attention_mask
 
     def _context_to_state(self, context: Dict[str, Any]) -> np.ndarray:
         """将上下文字典转换为模型输入状态向量"""
