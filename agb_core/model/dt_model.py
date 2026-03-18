@@ -93,8 +93,6 @@ class DTModel(BaseModel, nn.Module):
         scale: float,
         block_config: dict,
         output_mode: str,
-        state_mean: Optional[np.ndarray] = None,
-        state_std: Optional[np.ndarray] = None,
     ):
         """
         初始化 DT Model
@@ -109,8 +107,6 @@ class DTModel(BaseModel, nn.Module):
             n_layer: Transformer层数
             n_head: 注意力头数
             n_inner: FFN中间层维度
-            state_mean: 状态均值，用于归一化
-            state_std: 状态标准差，用于归一化
             scale: rtg缩放因子，用于与GAVE对齐
         """
         self._scale = scale
@@ -124,13 +120,6 @@ class DTModel(BaseModel, nn.Module):
         self._n_head = n_head
         self._n_inner = n_inner
         self._block_config = block_config
-
-        if state_mean is None:
-            state_mean = np.zeros(state_dim, dtype=np.float32)
-        if state_std is None:
-            state_std = np.ones(state_dim, dtype=np.float32)
-        self._state_mean = torch.from_numpy(state_mean.astype(np.float32)).to(device)
-        self._state_std = torch.from_numpy(state_std.astype(np.float32)).to(device)
 
         super().__init__()
 
@@ -249,11 +238,6 @@ class DTModel(BaseModel, nn.Module):
         batch_size = 1
         seq_length = states.shape[1]
 
-
-        states = torch.where(attention_mask.view(-1, 1) == 1,
-                             (states - self._state_mean) / (self._state_std + 1e-9),
-                             states)
-
         # print(states, actions, rtgs, timesteps, attention_mask)
 
         state_embeddings = self.embed_state(states)
@@ -274,12 +258,12 @@ class DTModel(BaseModel, nn.Module):
         ).permute(0, 2, 1, 3).reshape(batch_size, 3 * seq_length, self._hidden_size)
         stacked_inputs = self.embed_ln(stacked_inputs)
 
-        if attention_mask is not None:
-            stacked_attention_mask = torch.stack(
-                ([attention_mask for _ in range(3)]), dim=1
-            ).permute(0, 2, 1).reshape(batch_size, 3 * seq_length).to(stacked_inputs.dtype)
-        else:
-            stacked_attention_mask = torch.ones(batch_size, 3 * seq_length, dtype=torch.long, device=stacked_inputs.device)
+        # 通过 torch.max 现场计算 timestep_mask (batch, seq_len)
+        timestep_mask = torch.max(attention_mask, dim=-1)[0]
+        # 扩展到 3 份 (rtgs, states, actions)
+        stacked_attention_mask = torch.stack(
+            ([timestep_mask for _ in range(3)]), dim=1
+        ).permute(0, 2, 1).reshape(batch_size, 3 * seq_length).to(stacked_inputs.dtype)
 
         x = stacked_inputs
         for block in self.transformer:

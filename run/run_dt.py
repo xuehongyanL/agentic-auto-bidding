@@ -30,15 +30,18 @@ def main():
         n_layer=config['model']['n_layer'],
         n_head=config['model']['n_head'],
         n_inner=config['model']['n_inner'],
-        state_mean=normalize_dict['state_mean'],
-        state_std=normalize_dict['state_std'],
         scale=config['model']['scale'],
         target_rtg=config['model']['target_rtg'],
         block_config=config['model']['block_config'],
         output_mode=config['model']['output_mode'],
     ).load_model(config['model']['path'])
 
-    strategy = AuctionNetBaseStrategy(model, window_size=config['strategy']['window_size'])
+    strategy = AuctionNetBaseStrategy(
+        model,
+        window_size=config['strategy']['window_size'],
+        state_mean=normalize_dict['state_mean'],
+        state_std=normalize_dict['state_std'],
+    )
 
     keys = env.keys()
     print(f'Available keys: {len(keys)}')

@@ -21,7 +21,13 @@ class AuctionNetBaseStrategy(BaseStrategy):
     所有情况下的 numeral 都是 (原始 dict, DT 多元组)。
     """
 
-    def __init__(self, model: BaseModel, window_size: int = 20):
+    def __init__(
+        self,
+        model: BaseModel,
+        window_size: int = 20,
+        state_mean: np.ndarray | None = None,
+        state_std: np.ndarray | None = None,
+    ):
         super().__init__(model)
 
         self._window_size = window_size
@@ -29,6 +35,14 @@ class AuctionNetBaseStrategy(BaseStrategy):
         # 从 model 获取 state_dim 和 action_dim
         self._state_dim = model._state_dim
         self._action_dim = model._action_dim
+
+        # 状态归一化参数（AuctionNet 专属）
+        if state_mean is None:
+            state_mean = np.zeros(self._state_dim, dtype=np.float32)
+        if state_std is None:
+            state_std = np.ones(self._state_dim, dtype=np.float32)
+        self._state_mean = state_mean.astype(np.float32)
+        self._state_std = state_std.astype(np.float32)
 
         # 历史统计信息
         self._history_bid_mean: List[float] = []
@@ -173,18 +187,25 @@ class AuctionNetBaseStrategy(BaseStrategy):
             pad_action = np.zeros((pad_size, self._action_dim), dtype=np.float32)
             pad_rtg = np.zeros((pad_size, 1), dtype=np.float32)
             pad_time = np.zeros(pad_size, dtype=np.int64)
+            pad_mask = np.zeros((pad_size, self._action_dim), dtype=np.int64)
 
             states = np.concatenate([pad_state, states], axis=0)
             actions = np.concatenate([pad_action, actions], axis=0)
             rtgs = np.concatenate([pad_rtg, rtgs], axis=0)
             timesteps = np.concatenate([pad_time, timesteps], axis=0)
-            attention_mask = np.concatenate([np.zeros(pad_size, dtype=np.int64), np.ones(valid_len, dtype=np.int64)], axis=0)
+            attention_mask = np.concatenate([pad_mask, np.ones((valid_len, self._action_dim), dtype=np.int64)], axis=0)
         else:
             states = np.array(self._history_states[-self._window_size:], dtype=np.float32)
             actions = actions[-self._window_size:]
             rtgs = np.array(self._history_rtgs[-self._window_size:], dtype=np.float32).reshape(-1, 1)
             timesteps = np.arange(T - self._window_size, T, dtype=np.int64)
-            attention_mask = np.ones(self._window_size, dtype=np.int64)
+            attention_mask = np.ones((self._window_size, self._action_dim), dtype=np.int64)
+
+        # 状态归一化（只对有效数据，padding 部分保持为 0）
+        # 通过 np.max 现场计算 timestep_mask
+        valid_mask = np.max(attention_mask, axis=-1, keepdims=True)  # (window_size, 1)
+        states = np.where(valid_mask == 1, (states - self._state_mean) / (self._state_std + 1e-9), states)
+
         return states, actions, rtgs, timesteps, attention_mask
 
     def _context_to_state(self, context: Dict[str, Any]) -> np.ndarray:

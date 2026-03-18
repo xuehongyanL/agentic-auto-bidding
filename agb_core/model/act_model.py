@@ -67,10 +67,10 @@ class DecisionEmbeddingLayer(nn.Module):
         Args:
             dt_tuple: (states, actions, rtgs, timesteps, attention_mask)
                 states: [T, state_dim]
-                actions: [T, 1]
+                actions: [T, action_dim]
                 rtgs: [T+1, 1]
                 timesteps: [T]
-                attention_mask: [T]
+                attention_mask: [T, action_dim]
 
         Returns:
             dt_embeddings: [1, seq_len, embed_dim]
