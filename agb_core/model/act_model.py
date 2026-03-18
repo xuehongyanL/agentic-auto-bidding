@@ -51,7 +51,7 @@ class DecisionEmbeddingLayer(nn.Module):
         )
 
         # RTG MLP: [1] -> [embed_dim]
-        self.return_mlp = nn.Sequential(
+        self.rtg_mlp = nn.Sequential(
             nn.Linear(1, self._embed_dim),
             nn.GELU(),
             nn.Linear(self._embed_dim, self._embed_dim),
@@ -65,29 +65,29 @@ class DecisionEmbeddingLayer(nn.Module):
         每个元素（RTG/状态/动作）整体投影为一个 token
 
         Args:
-            dt_tuple: (states, actions, curr_score, timesteps, attention_mask)
+            dt_tuple: (states, actions, rtgs, timesteps, attention_mask)
                 states: [T, state_dim]
                 actions: [T, 1]
-                curr_score: [T+1, 1]
+                rtgs: [T+1, 1]
                 timesteps: [T]
                 attention_mask: [T]
 
         Returns:
             dt_embeddings: [1, seq_len, embed_dim]
         """
-        states, actions, curr_score, timesteps, attention_mask = dt_tuple
+        states, actions, rtgs, timesteps, attention_mask = dt_tuple
 
         # 转换为 tensor 并移动到设备上
         states = torch.from_numpy(states).float().to(self._device)
         actions = torch.from_numpy(actions).float().to(self._device)
-        curr_score = torch.from_numpy(curr_score).float().to(self._device)
+        rtgs = torch.from_numpy(rtgs).float().to(self._device)
 
         embeddings_list = []
 
-        # 1. 投影 curr_score (return-to-go): [T+1, 1] -> [T+1, 1, embed_dim]
+        # 1. 投影 rtgs (return-to-go): [T+1, 1] -> [T+1, 1, embed_dim]
         # 保持 T+1 个 RTG
-        if curr_score.shape[0] > 0:
-            rtg_embedded = self.return_mlp(curr_score)  # [T+1, 1] -> [T+1, embed_dim]
+        if rtgs.shape[0] > 0:
+            rtg_embedded = self.rtg_mlp(rtgs)  # [T+1, 1] -> [T+1, embed_dim]
             rtg_embedded = rtg_embedded.unsqueeze(1)  # [T+1, 1, embed_dim]
             embeddings_list.append(rtg_embedded)
 
@@ -192,7 +192,7 @@ class ActModel(BaseModel, nn.Module):
         self._state_std = torch.from_numpy(state_std.astype(np.float32)).to(device)
 
         # 占位符属性，与策略兼容
-        self._target_return = 0.0
+        self._target_rtg = 0.0
         self._scale = 1.0
 
         # 加载 tokenizer
@@ -248,7 +248,7 @@ class ActModel(BaseModel, nn.Module):
             prompt: 文本 prompt（忽略）
             numeral: 二元组 (context_dict, dt_tuple)
                 - context_dict: 原始 dict（用于兼容接口，ActModel 不使用）
-                - dt_tuple: (states, actions, curr_score, timesteps, attention_mask)
+                - dt_tuple: (states, actions, rtgs, timesteps, attention_mask)
 
         Returns:
             (None, action): response 为 None，action 是预测的 pacer 值
@@ -278,7 +278,7 @@ class ActModel(BaseModel, nn.Module):
 
         Args:
             text_prompt: str
-            dt_tuple: (states, actions, curr_score, timesteps, attention_mask)
+            dt_tuple: (states, actions, rtgs, timesteps, attention_mask)
 
         Returns:
             action: tensor

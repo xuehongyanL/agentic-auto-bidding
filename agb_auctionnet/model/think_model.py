@@ -49,7 +49,7 @@ class AuctionNetThinkModel(ThinkModel):
             window_size 由 strategy 传入，通过 numeral 中的 context_dict 获取
         """
         # 占位符属性，与 DTStrategy 兼容
-        self._target_return = 0.0
+        self._target_rtg = 0.0
         self._scale = 1.0
         self._state_mean = None
         self._state_std = None
@@ -77,7 +77,7 @@ class AuctionNetThinkModel(ThinkModel):
             prompt: 忽略此参数（保留接口兼容性），prompt 在内部构造
             numeral: 二元组 (context_dict, dt_input)
                 - 第一个元素：原始 dict（来自 base_strategy 的 _build_context）
-                - 第二个元素：DT 多元组 (states, actions, curr_score, timesteps, attention_mask)
+                - 第二个元素：DT 多元组 (states, actions, rtgs, timesteps, attention_mask)
 
         Returns:
             (response, action): response 是 LLM 的文本响应，action 是方向值（-1/0/1）

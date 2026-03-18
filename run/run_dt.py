@@ -33,7 +33,7 @@ def main():
         state_mean=normalize_dict['state_mean'],
         state_std=normalize_dict['state_std'],
         scale=config['model']['scale'],
-        target_return=config['model']['target_return'],
+        target_rtg=config['model']['target_rtg'],
         block_config=config['model']['block_config'],
         output_mode=config['model']['output_mode'],
     ).load_model(config['model']['path'])

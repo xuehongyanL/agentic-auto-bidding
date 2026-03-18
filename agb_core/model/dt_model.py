@@ -85,7 +85,7 @@ class DTModel(BaseModel, nn.Module):
         state_dim: int,
         action_dim: int,
         device: str,
-        target_return: float,
+        target_rtg: float,
         hidden_size: int,
         n_layer: int,
         n_head: int,
@@ -104,21 +104,21 @@ class DTModel(BaseModel, nn.Module):
             state_dim: 状态维度
             action_dim: 动作维度
             device: 设备
-            target_return: 目标返回值
+            target_rtg: 目标返回值
             hidden_size: 隐藏层维度
             n_layer: Transformer层数
             n_head: 注意力头数
             n_inner: FFN中间层维度
             state_mean: 状态均值，用于归一化
             state_std: 状态标准差，用于归一化
-            scale: curr_score缩放因子，用于与GAVE对齐
+            scale: rtg缩放因子，用于与GAVE对齐
         """
         self._scale = scale
         self._device = device
         self._state_dim = state_dim
         self._action_dim = action_dim
         self._output_mode = output_mode
-        self._target_return = target_return
+        self._target_rtg = target_rtg
         self._hidden_size = hidden_size
         self._n_layer = n_layer
         self._n_head = n_head
@@ -143,10 +143,10 @@ class DTModel(BaseModel, nn.Module):
         self._time_dim = 8
         self.transformer = nn.ModuleList([Block(self._block_config) for _ in range(self._block_config['n_layer'])])
         self.embed_timestep = nn.Embedding(96, self._time_dim)
-        self.embed_return = nn.Linear(1, self._hidden_size)
+        self.embed_rtg = nn.Linear(1, self._hidden_size)
         self.embed_state = nn.Linear(self._state_dim, self._hidden_size)
         self.embed_action = nn.Linear(self._action_dim, self._hidden_size)
-        self.trans_return = nn.Linear(self._time_dim + self._hidden_size, self._hidden_size)
+        self.trans_rtg = nn.Linear(self._time_dim + self._hidden_size, self._hidden_size)
         self.trans_state = nn.Linear(self._time_dim + self._hidden_size, self._hidden_size)
         self.trans_action = nn.Linear(self._time_dim + self._hidden_size, self._hidden_size)
         self.embed_ln = nn.LayerNorm(self._hidden_size)
@@ -154,7 +154,7 @@ class DTModel(BaseModel, nn.Module):
             nn.Linear(self._hidden_size, self._action_dim),
         )
         self.predict_state = nn.Linear(self._hidden_size, self._state_dim)
-        self.predict_return = nn.Sequential(
+        self.predict_rtg = nn.Sequential(
             nn.Linear(self._hidden_size, 128),
             nn.GELU(),
             nn.Linear(128, 16),
@@ -179,7 +179,33 @@ class DTModel(BaseModel, nn.Module):
 
     def load_model(self, model_path: str) -> 'DTModel':
         """加载预训练模型"""
-        self.load_state_dict(torch.load(model_path, map_location=self._device))
+        state_dict_raw = torch.load(model_path, map_location=self._device, weights_only=False)
+
+        # 向后兼容：旧模型的 key 映射到新模型
+        key_to_map = {
+            'embed_return.weight': 'embed_rtg.weight',
+            'embed_return.bias': 'embed_rtg.bias',
+            'trans_return.weight': 'trans_rtg.weight',
+            'trans_return.bias': 'trans_rtg.bias',
+            'predict_return.0.weight': 'predict_rtg.0.weight',
+            'predict_return.0.bias': 'predict_rtg.0.bias',
+            'predict_return.2.weight': 'predict_rtg.2.weight',
+            'predict_return.2.bias': 'predict_rtg.2.bias',
+            'predict_return.4.weight': 'predict_rtg.4.weight',
+            'predict_return.4.bias': 'predict_rtg.4.bias',
+        }
+        key_to_delete = {
+            'embed_reward.weight', 'embed_reward.bias',
+            'trans_reward.weight', 'trans_reward.bias',
+        }
+        state_dict: dict[str, Any] = {}
+        for k, v in state_dict_raw.items():
+            if k in key_to_map:
+                state_dict[key_to_map[k]] = v
+            elif k not in key_to_delete:
+                state_dict[k] = v
+
+        self.load_state_dict(state_dict)
         self.eval()
         return self
 
@@ -201,22 +227,22 @@ class DTModel(BaseModel, nn.Module):
         if numeral is None:
             raise ValueError("DTModel requires numeral input")
 
-        _, (states, actions, curr_score, timesteps, attention_mask) = numeral
-        action = self._get_action(states, actions, curr_score, timesteps, attention_mask)
+        _, (states, actions, rtgs, timesteps, attention_mask) = numeral
+        action = self._get_action(states, actions, rtgs, timesteps, attention_mask)
         # 确保返回 numpy array
         action = action.detach().cpu().numpy()
         return None, action
 
-    def _get_action(self, states, actions, curr_score, timesteps, attention_mask):
+    def _get_action(self, states, actions, rtgs, timesteps, attention_mask):
         states = torch.from_numpy(states).to(self._device)
         actions = torch.from_numpy(actions).to(self._device)
-        curr_score = torch.from_numpy(curr_score).to(self._device)
+        rtgs = torch.from_numpy(rtgs).to(self._device)
         timesteps = torch.from_numpy(timesteps).to(self._device)
         attention_mask = torch.from_numpy(attention_mask).to(self._device)
 
         states = states.unsqueeze(0)
         actions = actions.unsqueeze(0)
-        curr_score = curr_score.unsqueeze(0)
+        rtgs = rtgs.unsqueeze(0)
         timesteps = timesteps.unsqueeze(0)
         attention_mask = attention_mask.unsqueeze(0)
 
@@ -228,23 +254,23 @@ class DTModel(BaseModel, nn.Module):
                              (states - self._state_mean) / (self._state_std + 1e-9),
                              states)
 
-        # print(states, actions, curr_score, timesteps, attention_mask)
+        # print(states, actions, rtgs, timesteps, attention_mask)
 
         state_embeddings = self.embed_state(states)
         action_embeddings = self.embed_action(actions)
-        returns_embeddings = self.embed_return(curr_score)
+        rtg_embeddings = self.embed_rtg(rtgs)
         time_embeddings = self.embed_timestep(timesteps)
 
         state_embeddings = torch.cat((state_embeddings, time_embeddings), dim=-1)
         action_embeddings = torch.cat((action_embeddings, time_embeddings), dim=-1)
-        returns_embeddings = torch.cat((returns_embeddings, time_embeddings), dim=-1)
+        rtg_embeddings = torch.cat((rtg_embeddings, time_embeddings), dim=-1)
 
         state_embeddings = self.trans_state(state_embeddings)
         action_embeddings = self.trans_action(action_embeddings)
-        returns_embeddings = self.trans_return(returns_embeddings)
+        rtg_embeddings = self.trans_rtg(rtg_embeddings)
 
         stacked_inputs = torch.stack(
-            (returns_embeddings, state_embeddings, action_embeddings), dim=1
+            (rtg_embeddings, state_embeddings, action_embeddings), dim=1
         ).permute(0, 2, 1, 3).reshape(batch_size, 3 * seq_length, self._hidden_size)
         stacked_inputs = self.embed_ln(stacked_inputs)
 

@@ -43,7 +43,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
         # DT 相关历史记录
         self._history_states: list = []
         self._history_actions: list = []
-        self._history_scores: list = []
+        self._history_rtgs: list = []
 
         # LLM 策略需要的 pacer 历史
         self._history_pacers: list = []
@@ -71,7 +71,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
 
         self._history_states = []
         self._history_actions = []
-        self._history_scores = [self._model._target_return]
+        self._history_rtgs = [self._model._target_rtg]
         self._history_pacers = []
         self._last_pacer = np.array([1.0])
         self._cum_reward = 0.0
@@ -81,11 +81,11 @@ class AuctionNetBaseStrategy(BaseStrategy):
         conversion_sum = env_step_result.get('conversion', 0.0)
         conversion_mean = conversion_sum / pv_num if pv_num > 0 else 0.0
 
-        # _cum_reward 累加总和，用于 curr_score 计算
+        # _cum_reward 累加总和，用于 rtg 计算
         self._cum_reward += conversion_sum
 
-        curr_score = self._calc_curr_score()
-        self._history_scores.append(curr_score)
+        rtg = self._calc_rtg()
+        self._history_rtgs.append(rtg)
 
         # 更新历史统计信息
         self._history_bid_mean.append(env_step_result.get('bid_mean', 0))
@@ -138,10 +138,10 @@ class AuctionNetBaseStrategy(BaseStrategy):
         self._history_pacers.append(pacer)
         return response, pacer
 
-    def _calc_curr_score(self) -> float:
-        """计算当前 score"""
+    def _calc_rtg(self) -> float:
+        """计算当前 rtg"""
         if not self._history_states or self._cum_reward <= 0:
-            return self._model._target_return
+            return self._model._target_rtg
 
         state = self._history_states[-1]
         budget_left = state[1]
@@ -151,7 +151,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
         curr_penalty_squared = curr_coef ** 2
         curr_penalty = 1.0 if curr_penalty_squared > 1.0 else curr_coef
         current_score = curr_penalty * self._cum_reward
-        return float(self._model._target_return - current_score / self._model._scale)
+        return float(self._model._target_rtg - current_score / self._model._scale)
 
     def _build_model_input(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """构建模型输入，padding 到 window_size"""
@@ -166,26 +166,26 @@ class AuctionNetBaseStrategy(BaseStrategy):
 
         if pad_size > 0:
             states = np.array(self._history_states, dtype=np.float32)
-            scores = np.array(self._history_scores, dtype=np.float32).reshape(-1, 1)
+            rtgs = np.array(self._history_rtgs, dtype=np.float32).reshape(-1, 1)
             timesteps = np.arange(T, dtype=np.int64)
 
             pad_state = np.zeros((pad_size, self._state_dim), dtype=np.float32)
             pad_action = np.zeros((pad_size, self._action_dim), dtype=np.float32)
-            pad_score = np.zeros((pad_size, 1), dtype=np.float32)
+            pad_rtg = np.zeros((pad_size, 1), dtype=np.float32)
             pad_time = np.zeros(pad_size, dtype=np.int64)
 
             states = np.concatenate([pad_state, states], axis=0)
             actions = np.concatenate([pad_action, actions], axis=0)
-            scores = np.concatenate([pad_score, scores], axis=0)
+            rtgs = np.concatenate([pad_rtg, rtgs], axis=0)
             timesteps = np.concatenate([pad_time, timesteps], axis=0)
             attention_mask = np.concatenate([np.zeros(pad_size, dtype=np.int64), np.ones(valid_len, dtype=np.int64)], axis=0)
         else:
             states = np.array(self._history_states[-self._window_size:], dtype=np.float32)
             actions = actions[-self._window_size:]
-            scores = np.array(self._history_scores[-self._window_size:], dtype=np.float32).reshape(-1, 1)
+            rtgs = np.array(self._history_rtgs[-self._window_size:], dtype=np.float32).reshape(-1, 1)
             timesteps = np.arange(T - self._window_size, T, dtype=np.int64)
             attention_mask = np.ones(self._window_size, dtype=np.int64)
-        return states, actions, scores, timesteps, attention_mask
+        return states, actions, rtgs, timesteps, attention_mask
 
     def _context_to_state(self, context: Dict[str, Any]) -> np.ndarray:
         """将上下文字典转换为模型输入状态向量"""

@@ -40,7 +40,7 @@ class AgentModel(BaseModel):
         self._act_model = act_model
 
         # 继承子模型的占位符属性（用于与策略兼容）
-        self._target_return = getattr(think_model, '_target_return', 0.0)
+        self._target_rtg = getattr(think_model, '_target_rtg', 0.0)
         self._scale = getattr(think_model, '_scale', 1.0)
         # 从 act_model 获取 state_dim 和 action_dim
         self._state_dim = act_model._state_dim
