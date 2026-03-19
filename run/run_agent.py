@@ -68,6 +68,8 @@ def main():
     act_model = ActModel(
         model_path=config['model']['act_model']['path'],
         model_type=config['model']['act_model']['backend'],
+        state_dim=config['strategy']['state_dim'],
+        action_dim=config['strategy']['action_dim'],
         device=config['device'],
         state_mean=normalize_dict['state_mean'],
         state_std=normalize_dict['state_std'],
