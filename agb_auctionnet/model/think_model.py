@@ -8,58 +8,25 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
+from agb_core.infer.llm_backend import BaseLLMBackend
 from agb_core.model.think_model import ThinkModel
 
 
 class AuctionNetThinkModel(ThinkModel):
-    """
-    AuctionNet 出价模型（Think 模式）
-
-    继承 ThinkModel，负责：
-    - prompt 构造（基于 numeral 业务 context）
-    - LLM response 解析为 action
-    - context 结构假设和处理
-    """
-
     def __init__(
         self,
-        model_path: str,
-        model_type: str = 'vllm',
-        device: str = 'cuda',
-        temperature: float = 0.0,
-        max_tokens: int = 1024,
+        llm_backend: BaseLLMBackend,
         state_dim: int = 16,
         action_dim: int = 1,
         verbose: int = 0,
     ):
-        """
-        初始化 AuctionNet Think Model
-
-        Args:
-            model_path: 本地模型路径
-            model_type: 模型加载方式，可选 'vllm', 'transformers'
-            device: 设备
-            temperature: 采样温度
-            max_tokens: 最大生成 token 数
-            state_dim: 状态维度
-            action_dim: 动作维度
-            verbose: 是否打印 prompt，0 不打印，1 完整打印
-
-        Note:
-            window_size 由 strategy 传入，通过 numeral 中的 context_dict 获取
-        """
-        # 占位符属性，与 DTStrategy 兼容
         self._target_rtg = 0.0
         self._scale = 1.0
         self._state_mean = None
         self._state_std = None
 
         super().__init__(
-            model_path=model_path,
-            model_type=model_type,
-            device=device,
-            temperature=temperature,
-            max_tokens=max_tokens,
+            llm_backend=llm_backend,
             state_dim=state_dim,
             action_dim=action_dim,
             verbose=verbose,

@@ -6,6 +6,8 @@ import yaml
 from agb_auctionnet.env.auctionnet_env import AuctionNetEnv
 from agb_auctionnet.model.think_model import AuctionNetThinkModel
 from agb_auctionnet.strategy.base_strategy import AuctionNetBaseStrategy
+from agb_core.infer.llm_backend import (OpenAIBackend, TransformersBackend,
+                                        VLLMBackend)
 from agb_core.model.act_model import ActModel
 from agb_core.model.agent_model import AgentModel
 
@@ -23,13 +25,42 @@ def main():
 
     env = AuctionNetEnv(data_filename=config['env']['data_path'])
 
+    # 初始化 llm_backend
+    bcfg = config['llm_backend']
+    backend_type = bcfg['type']
+    if backend_type == 'transformers':
+        llm_backend = TransformersBackend(
+            model_path=bcfg['model_path'],
+            temperature=bcfg['temperature'],
+            max_tokens=bcfg['max_tokens'],
+            stop=bcfg.get('stop', []),
+            device=bcfg.get('device', 'cuda'),
+        )
+    elif backend_type == 'vllm':
+        llm_backend = VLLMBackend(
+            model_path=bcfg['model_path'],
+            temperature=bcfg['temperature'],
+            max_tokens=bcfg['max_tokens'],
+            stop=bcfg.get('stop', []),
+            tensor_parallel_size=bcfg.get('tensor_parallel_size', 1),
+            gpu_memory_utilization=bcfg.get('gpu_memory_utilization', 0.9),
+        )
+    elif backend_type == 'openai':
+        llm_backend = OpenAIBackend(
+            model_path=bcfg['model_path'],
+            temperature=bcfg['temperature'],
+            max_tokens=bcfg['max_tokens'],
+            stop=bcfg.get('stop', []),
+            base_url=bcfg.get('base_url'),
+            api_key=bcfg.get('api_key'),
+            timeout=bcfg.get('timeout', 120.0),
+        )
+    else:
+        raise ValueError(f'Unknown llm_backend type: {backend_type}')
+
     # 创建 Think 子模型
     think_model = AuctionNetThinkModel(
-        model_path=config['model']['think_model']['path'],
-        model_type=config['model']['think_model']['backend'],
-        device=config['device'],
-        temperature=config['model']['think_model']['temperature'],
-        max_tokens=config['model']['think_model']['max_tokens'],
+        llm_backend=llm_backend,
         verbose=config['model']['think_model']['verbose'],
     )
 
