@@ -5,7 +5,7 @@ AuctionNet 基础策略实现
 所有情况下的 numeral 都是 (原始 dict, Trajectory)。
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -46,14 +46,14 @@ class AuctionNetBaseStrategy(BaseStrategy):
         self._state_std = state_std.astype(np.float32)
 
         # 历史统计信息
-        self._history_bid_mean: List[float] = []
-        self._history_pvalue_mean: List[float] = []
-        self._history_pv_num: List[int] = []
-        self._history_conversion: List[float] = []
-        self._history_xi: List[float] = []
-        self._history_value_mean: List[float] = []
-        self._history_least_winning_cost_mean: List[float] = []
-        self._history_total_cost: List[float] = []
+        self._history_bid_mean: list[float] = []
+        self._history_pvalue_mean: list[float] = []
+        self._history_pv_num: list[int] = []
+        self._history_conversion: list[float] = []
+        self._history_xi: list[float] = []
+        self._history_value_mean: list[float] = []
+        self._history_least_winning_cost_mean: list[float] = []
+        self._history_total_cost: list[float] = []
 
         # DT 相关历史记录
         self._history_states: list = []
@@ -91,7 +91,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
         self._last_pacer = np.array([1.0])
         self._cum_reward = 0.0
 
-    def update(self, env_step_result: Dict[str, Any]) -> None:
+    def update(self, env_step_result: dict[str, Any]) -> None:
         pv_num = env_step_result.get('pv_num', 1)
         conversion_sum = env_step_result.get('conversion', 0.0)
         conversion_mean = conversion_sum / pv_num if pv_num > 0 else 0.0
@@ -213,7 +213,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
 
         return Trajectory(states, actions, rtgs, timesteps, attention_mask)
 
-    def _context_to_state(self, context: Dict[str, Any]) -> np.ndarray:
+    def _context_to_state(self, context: dict[str, Any]) -> np.ndarray:
         """将上下文字典转换为模型输入状态向量"""
         state = np.array([
             context['time_left'],
@@ -243,7 +243,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
         self.cpm = first_pvalue_mean
         self.cpn = first_pv_num
 
-    def _build_context(self) -> Dict[str, Any]:
+    def _build_context(self) -> dict[str, Any]:
         t = len(self._history_bid_mean)
         time_left = (self._num_timesteps - t) / self._num_timesteps if self._num_timesteps > 0 else 0
 
@@ -291,13 +291,13 @@ class AuctionNetBaseStrategy(BaseStrategy):
         return context
 
     @staticmethod
-    def _mean(data: List[float]) -> float:
+    def _mean(data: list[float]) -> float:
         if not data:
             return 0.0
         return sum(data) / len(data)
 
     @staticmethod
-    def _mean_last_n(data: List, n: int) -> float:
+    def _mean_last_n(data: list, n: int) -> float:
         if not data:
             return 0.0
         last_n = data[max(0, len(data) - n):]

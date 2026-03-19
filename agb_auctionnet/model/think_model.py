@@ -4,7 +4,7 @@ AuctionNet Think Model 实现
 基于 Thinking LLM 的出价模型，负责 prompt 构造和 response 解析。
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 
@@ -36,7 +36,7 @@ class AuctionNetThinkModel(ThinkModel):
         self,
         prompt: Optional[str],
         numeral: Optional[Any] = None
-    ) -> Tuple[Optional[str], Optional[Any]]:
+    ) -> tuple[Optional[str], Optional[Any]]:
         """
         根据上下文预测 pacer
 
@@ -72,7 +72,7 @@ class AuctionNetThinkModel(ThinkModel):
 
         return self._format_user_prompt(context_dict)
 
-    def _format_user_prompt(self, context_dict: Dict[str, Any]) -> str:
+    def _format_user_prompt(self, context_dict: dict[str, Any]) -> str:
         """根据 context_dict 构建用户 prompt"""
         window_size = context_dict.get('window_size', 20)
         num_timesteps = context_dict.get('num_timesteps', 48)

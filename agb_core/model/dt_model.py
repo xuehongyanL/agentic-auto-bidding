@@ -5,9 +5,8 @@ DT Model 实现
 """
 
 import math
-from typing import Any, Optional, Tuple
+from typing import Any, Optional
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -205,7 +204,7 @@ class DTModel(BaseModel, nn.Module):
         self,
         prompt: Optional[str],
         numeral: Optional[Any] = None
-    ) -> Tuple[Optional[str], Optional[Any]]:
+    ) -> tuple[Optional[str], Optional[Any]]:
         """
         根据历史序列预测动作
 

@@ -8,7 +8,7 @@ AuctionNet 数据集的环境实现
 import os
 import pickle
 import random
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 
@@ -39,18 +39,18 @@ class AuctionNetEnv(OfflineEnv):
         self._min_remaining_budget = min_remaining_budget
 
         # 数据存储
-        self._test_dict: Dict = {}
-        self._keys: List[Tuple] = []
+        self._test_dict: dict = {}
+        self._keys: list[tuple] = []
 
         # 当前状态
-        self._current_key: Optional[Tuple] = None
+        self._current_key: Optional[tuple] = None
         self._current_timestep: int = 0
         self._num_timesteps: int = 0
 
         # 当前episode数据
-        self._pValues: List[np.ndarray] = []
-        self._pValueSigmas: List[np.ndarray] = []
-        self._leastWinningCosts: List[np.ndarray] = []
+        self._pValues: list[np.ndarray] = []
+        self._pValueSigmas: list[np.ndarray] = []
+        self._leastWinningCosts: list[np.ndarray] = []
         self._budget: float = 0.0
         self._cpa_constraint: float = 0.0
         self._remaining_budget: float = 0.0
@@ -95,11 +95,11 @@ class AuctionNetEnv(OfflineEnv):
                 self._test_dict[key] = group
                 self._keys.append(key)
 
-    def keys(self) -> List[Tuple]:
+    def keys(self) -> list[tuple]:
         """返回所有可用的 (period_id, advertiser_id) 组合"""
         return self._keys.copy()
 
-    def reset(self, key: Optional[Tuple] = None) -> Dict[str, Any]:
+    def reset(self, key: Optional[tuple] = None) -> dict[str, Any]:
         """
         重置环境到指定 episode 的初始状态
 
@@ -156,7 +156,7 @@ class AuctionNetEnv(OfflineEnv):
             return np.array([])
         return self._pValues[self._current_timestep]
 
-    def step(self, pacer: np.ndarray) -> Dict[str, Any]:
+    def step(self, pacer: np.ndarray) -> dict[str, Any]:
         """
         执行一步出价
 
@@ -254,7 +254,7 @@ class AuctionNetEnv(OfflineEnv):
         pValueSigmas: np.ndarray,
         bids: np.ndarray,
         leastWinningCosts: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         模拟广告竞拍过程
 

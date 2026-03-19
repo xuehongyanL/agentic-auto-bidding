@@ -5,7 +5,7 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 
 class OfflineEnv(ABC):
@@ -17,7 +17,7 @@ class OfflineEnv(ABC):
     """
 
     @abstractmethod
-    def keys(self) -> List[Tuple]:
+    def keys(self) -> list[tuple]:
         """
         返回环境中所有可用的 (period_id, advertiser_id) 组合
 
@@ -27,7 +27,7 @@ class OfflineEnv(ABC):
         pass
 
     @abstractmethod
-    def reset(self, key: Optional[Tuple] = None) -> Dict[str, Any]:
+    def reset(self, key: Optional[tuple] = None) -> dict[str, Any]:
         """
         重置环境到初始状态
 
@@ -41,7 +41,7 @@ class OfflineEnv(ABC):
         pass
 
     @abstractmethod
-    def step(self, pacer: float) -> Dict[str, Any]:
+    def step(self, pacer: float) -> dict[str, Any]:
         """
         执行一步出价
 

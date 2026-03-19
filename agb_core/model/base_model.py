@@ -11,7 +11,7 @@ Model 基类定义
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 
 class BaseModel(ABC):
@@ -29,7 +29,7 @@ class BaseModel(ABC):
         self,
         prompt: Optional[str],
         numeral: Optional[Any] = None
-    ) -> Tuple[Optional[str], Optional[Any]]:
+    ) -> tuple[Optional[str], Optional[Any]]:
         """
         根据文本和/或数值输入预测响应和/或动作
 

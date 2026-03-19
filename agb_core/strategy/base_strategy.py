@@ -5,7 +5,7 @@ Strategy 基类定义
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any
 
 from agb_core.model.base_model import BaseModel
 
@@ -34,7 +34,7 @@ class BaseStrategy(ABC):
         pass
 
     @abstractmethod
-    def update(self, env_step_result: Dict[str, Any]) -> None:
+    def update(self, env_step_result: dict[str, Any]) -> None:
         """
         更新策略上下文
 

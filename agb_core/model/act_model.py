@@ -5,7 +5,7 @@ ActModel 实现
 采用论文方法：使用 MLP 将数值数据投影到 LLM embedding 维度，然后拼接送入 LLM。
 """
 
-from typing import Any, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 import torch

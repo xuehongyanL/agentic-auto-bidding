@@ -6,7 +6,7 @@ AgentModel 实现
 2. Act 模型：输入 (response, numeral)，输出 action
 """
 
-from typing import Any, Optional, Tuple
+from typing import Any, Optional
 
 from agb_core.model.base_model import BaseModel
 
@@ -51,7 +51,7 @@ class AgentModel(BaseModel):
         self,
         prompt: Optional[str],
         numeral: Optional[Any] = None
-    ) -> Tuple[Optional[str], Optional[Any]]:
+    ) -> tuple[Optional[str], Optional[Any]]:
         """
         两阶段预测：
         1. 调用 Think 模型获取 response
