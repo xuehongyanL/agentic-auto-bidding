@@ -26,7 +26,7 @@ def main():
     env = AuctionNetEnv(data_filename=config['env']['data_path'])
 
     # 初始化 llm_backend
-    bcfg = config['llm_backend']
+    bcfg = config['model']['think_model']['llm_backend']
     backend_type = bcfg['type']
     if backend_type == 'transformers':
         llm_backend = TransformersBackend(

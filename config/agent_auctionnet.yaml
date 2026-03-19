@@ -1,18 +1,36 @@
 model:
   think_model:
     name: AuctionNetThinkModel
-    path: /DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct
-    backend: transformers
-    temperature: 0.0
-    max_tokens: 1024
     verbose: 0
+    llm_backend:
+      type: transformers
+      model_path: /DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct
+      temperature: 0.0
+      max_tokens: 1024
+      stop: []
+      device: cuda
+
+      # type: vllm
+      # model_path: /DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct
+      # temperature: 0.0
+      # max_tokens: 1024
+      # stop: []
+      # tensor_parallel_size: 1
+      # gpu_memory_utilization: 0.9
+
+      # type: openai
+      # model_path: gpt-4o
+      # temperature: 0.0
+      # max_tokens: 1024
+      # stop: []
+      # base_url: https://api.openai.com/v1
+      # api_key: YOUR_API_KEY
+      # timeout: 120.0
   act_model:
     name: ActModel
     path: /DATA/xuehy/agent/models/Qwen/Qwen2.5-0.5B-Instruct
     backend: transformers
     normalize_dict_path: /DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/normalize_dict.pkl
-    temperature: 0.0
-    max_tokens: 1024
 
 strategy:
   name: AuctionNetBaseStrtegy
@@ -26,28 +44,3 @@ env:
   min_remaining_budget: 0.1
 
 device: cuda
-
-llm_backend:
-  type: transformers
-  model_path: /DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct
-  temperature: 0.0
-  max_tokens: 1024
-  stop: []
-  device: cuda
-
-  # type: vllm
-  # model_path: /DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct
-  # temperature: 0.0
-  # max_tokens: 1024
-  # stop: []
-  # tensor_parallel_size: 1
-  # gpu_memory_utilization: 0.9
-
-  # type: openai
-  # model_path: gpt-4o
-  # temperature: 0.0
-  # max_tokens: 1024
-  # stop: []
-  # base_url: https://api.openai.com/v1
-  # api_key: YOUR_API_KEY
-  # timeout: 120.0
