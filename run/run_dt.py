@@ -1,7 +1,6 @@
 import argparse
 import pickle
 
-import numpy as np
 import yaml
 
 from agb_auctionnet.env.auctionnet_env import AuctionNetEnv
@@ -53,6 +52,8 @@ def main():
             budget=reset_info['budget'],
             cpa_constraint=reset_info['cpa_constraint'],
             num_timesteps=reset_info['num_timesteps'],
+            first_pvalue_mean=reset_info['first_pvalue_mean'],
+            first_pv_num=reset_info['first_pv_num'],
         )
         print(f'Episode: budget={reset_info["budget"]}, cpa={reset_info["cpa_constraint"]}, steps={reset_info["num_timesteps"]}')
 
@@ -60,10 +61,6 @@ def main():
         total_cost = 0
 
         for step in range(1, reset_info["num_timesteps"] + 1):
-            current_pvalues = env.get_current_pvalues()
-            # 注入当前时间步的流量信息到 strategy（必须在 bidding 之前设置）
-            strategy.cpm = float(np.mean(current_pvalues)) if current_pvalues.size > 0 else 0.0
-            strategy.cpn = int(current_pvalues.size)
             _, pacer = strategy.bidding()
             print(f'Step#{step}, pacer={pacer}')
             result = env.step(pacer)

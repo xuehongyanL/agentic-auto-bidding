@@ -138,10 +138,17 @@ class AuctionNetEnv(OfflineEnv):
         self._current_timestep = 0
         self._remaining_budget = self._budget
 
+        # 第一步的流量信息（供 Strategy.set_episode_info() 初始化 cpm/cpn）
+        first_pvalues = self.get_current_pvalues()
+        first_pvalue_mean = float(np.mean(first_pvalues)) if first_pvalues.size > 0 else 0.0
+        first_pv_num = int(first_pvalues.size)
+
         return {
             'budget': self._budget,
             'cpa_constraint': self._cpa_constraint,
             'num_timesteps': self._num_timesteps,
+            'first_pvalue_mean': first_pvalue_mean,
+            'first_pv_num': first_pv_num,
         }
 
     def get_current_pvalues(self) -> np.ndarray:
@@ -218,6 +225,11 @@ class AuctionNetEnv(OfflineEnv):
         self._current_timestep += 1
         done = self._current_timestep >= self._num_timesteps
 
+        # 获取下一步的流量信息（供 Strategy.update() 注入 cpm/cpn，供下次 bidding() 使用）
+        next_pvalues = self.get_current_pvalues()
+        next_pvalue_mean = float(np.mean(next_pvalues)) if next_pvalues.size > 0 else 0.0
+        next_pv_num = int(next_pvalues.size)
+
         return {
             'cost': step_cost,
             'gmv': gmv,
@@ -228,6 +240,8 @@ class AuctionNetEnv(OfflineEnv):
             'pvalue_mean': float(np.mean(pValue)) if pValue.shape[0] > 0 else 0.0,
             'pvalue_sum': float(np.sum(pValue)),
             'pv_num': pValue.shape[0],
+            'next_pvalue_mean': next_pvalue_mean,
+            'next_pv_num': next_pv_num,
             'conversion': conversion,
             'value_mean': float(np.mean(tick_value)) if tick_value.shape[0] > 0 else 0.0,
             'win_rate': float(np.mean(tick_status)) if tick_status.shape[0] > 0 else 0.0,

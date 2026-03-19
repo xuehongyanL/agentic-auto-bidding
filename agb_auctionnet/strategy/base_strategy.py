@@ -70,7 +70,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
         self._last_pacer: np.ndarray = np.array([1.0])
         self._cum_reward: float = 0.0
 
-        # 当前时间步的流量信息
+        # 当前时间步的流量信息（由 update() 自动从 env.step() 结果中注入，供下次 bidding() 使用）
         self.cpm: float = 0.0
         self.cpn: int = 0
 
@@ -95,6 +95,10 @@ class AuctionNetBaseStrategy(BaseStrategy):
         pv_num = env_step_result.get('pv_num', 1)
         conversion_sum = env_step_result.get('conversion', 0.0)
         conversion_mean = conversion_sum / pv_num if pv_num > 0 else 0.0
+
+        # 为下一次 bidding() 注入下一步的流量信息
+        self.cpm = env_step_result.get('next_pvalue_mean', 0.0)
+        self.cpn = env_step_result.get('next_pv_num', 0)
 
         # _cum_reward 累加总和，用于 rtg 计算
         self._cum_reward += conversion_sum
@@ -231,10 +235,13 @@ class AuctionNetBaseStrategy(BaseStrategy):
         ], dtype=np.float32)
         return state
 
-    def set_episode_info(self, budget: float, cpa_constraint: float, num_timesteps: int) -> None:
+    def set_episode_info(self, budget: float, cpa_constraint: float, num_timesteps: int,
+                         first_pvalue_mean: float = 0.0, first_pv_num: int = 0) -> None:
         self._budget = budget
         self._cpa_constraint = cpa_constraint
         self._num_timesteps = num_timesteps
+        self.cpm = first_pvalue_mean
+        self.cpn = first_pv_num
 
     def _build_context(self) -> Dict[str, Any]:
         t = len(self._history_bid_mean)
