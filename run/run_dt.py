@@ -33,6 +33,7 @@ def main():
         target_rtg=config['model']['target_rtg'],
         block_config=config['model']['block_config'],
         output_mode=config['model']['output_mode'],
+        max_timestep_len=config['model']['max_timestep_len'],
     ).load_model(config['model']['path'])
 
     strategy = AuctionNetBaseStrategy(

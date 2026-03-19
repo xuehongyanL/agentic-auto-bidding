@@ -94,6 +94,7 @@ class DTModel(BaseModel, nn.Module):
         scale: float,
         block_config: dict,
         output_mode: str,
+        max_timestep_len: int,
     ):
         """
         初始化 DT Model
@@ -121,6 +122,7 @@ class DTModel(BaseModel, nn.Module):
         self._n_head = n_head
         self._n_inner = n_inner
         self._block_config = block_config
+        self._max_timestep_len = max_timestep_len
 
         super().__init__()
 
@@ -132,7 +134,7 @@ class DTModel(BaseModel, nn.Module):
         """构建模型结构"""
         self._time_dim = 8
         self.transformer = nn.ModuleList([Block(self._block_config) for _ in range(self._block_config['n_layer'])])
-        self.embed_timestep = nn.Embedding(96, self._time_dim)
+        self.embed_timestep = nn.Embedding(self._max_timestep_len, self._time_dim)
         self.embed_rtg = nn.Linear(1, self._hidden_size)
         self.embed_state = nn.Linear(self._state_dim, self._hidden_size)
         self.embed_action = nn.Linear(self._action_dim, self._hidden_size)
