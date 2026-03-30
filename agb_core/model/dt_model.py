@@ -7,12 +7,13 @@ DT Model 实现
 import math
 from typing import Any, Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from agb_core.data.trajectory import Trajectory
-from agb_core.model.base_model import BaseModel
+from agb_core.model.base_model import BaseModel, DecisionModel
 
 
 class CausalSelfAttention(nn.Module):
@@ -73,7 +74,7 @@ class Block(nn.Module):
         return x
 
 
-class DTModel(BaseModel, nn.Module):
+class DTModel(DecisionModel, nn.Module):
     """
     Decision Transformer 模型
 
@@ -124,6 +125,10 @@ class DTModel(BaseModel, nn.Module):
         self._max_timestep_len = max_timestep_len
 
         super().__init__()
+
+        # 注册为 buffer（无梯度，随 model.state_dict() 自动导出/导入）
+        self.register_buffer('_state_mean', torch.zeros(state_dim, dtype=torch.float32))
+        self.register_buffer('_state_std', torch.ones(state_dim, dtype=torch.float32))
 
         self._build_model()
 
@@ -196,36 +201,69 @@ class DTModel(BaseModel, nn.Module):
             elif k not in key_to_delete:
                 state_dict[k] = v
 
+        # 归一化参数（向后兼容：旧 checkpoint 没有则保留 __init__ 的默认值）
+        if '_state_mean' not in state_dict:
+            state_dict['_state_mean'] = self._state_mean
+        if '_state_std' not in state_dict:
+            state_dict['_state_std'] = self._state_std
+
         self.load_state_dict(state_dict)
         self.eval()
         return self
 
+    def set_normalize(self, state_mean: np.ndarray, state_std: np.ndarray) -> 'DTModel':
+        """
+        设置归一化参数（运行时更新或向后兼容旧 checkpoint）。
+
+        Args:
+            state_mean: 状态均值向量
+            state_std: 状态标准差向量
+        """
+        self._state_mean = torch.tensor(state_mean, dtype=torch.float32, device=self._device)
+        self._state_std = torch.tensor(state_std, dtype=torch.float32, device=self._device)
+        return self
+
     def predict(
         self,
-        prompt: Optional[str],
-        numeral: Optional[Any] = None
-    ) -> tuple[Optional[str], Optional[Any]]:
+        traj: Trajectory,
+        prompt = None,
+        context = None,
+    ) -> tuple[None, np.ndarray]:
         """
         根据历史序列预测动作
 
         Args:
             prompt: 忽略此参数（保留接口兼容性）
-            numeral: 二元组 (context_dict, Trajectory)
+            context: 忽略此参数（保留接口兼容性）
+            traj: Trajectory
 
         Returns:
             (None, action): response 为 None，action 是出价系数
         """
-        if numeral is None:
-            raise ValueError("DTModel requires numeral input")
+        traj = traj._replace(
+            states=np.expand_dims(traj.states, axis=0),
+            actions=np.expand_dims(traj.actions, axis=0),
+            rtgs=np.expand_dims(traj.rtgs, axis=0),
+            timesteps=np.expand_dims(traj.timesteps, axis=0),
+            attention_mask=np.expand_dims(traj.attention_mask, axis=0),
+        )
+        action = self.predict_batch(traj)[1][0]
+        return None, action
 
-        _, trajectory = numeral
-        action = self._get_action(trajectory)
-        # 确保返回 numpy array
+    def predict_batch(
+        self,
+        traj: Trajectory,
+        prompts = None,
+        contexts = None,
+    ) -> tuple[None, np.ndarray]:
+        action = self._get_action(traj)
         action = action.detach().cpu().numpy()
         return None, action
 
     def _get_action(self, trajectory: Trajectory):
-        states = torch.from_numpy(trajectory.states).to(self._device)
+        # 归一化 states（z-score）；buffer 已在模型设备上，无需额外移动
+        raw_states = torch.from_numpy(trajectory.states).to(self._device)
+        states = (raw_states - self._state_mean) / (self._state_std + 1e-9)
         actions = torch.from_numpy(trajectory.actions).to(self._device)
         rtgs = torch.from_numpy(trajectory.rtgs).to(self._device)
         timesteps = torch.from_numpy(trajectory.timesteps).to(self._device)

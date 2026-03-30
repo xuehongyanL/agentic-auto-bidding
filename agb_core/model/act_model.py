@@ -1,11 +1,5 @@
-"""
-ActModel 实现
-
-对应原来的 LBMModel，输入 prompt 和 numeral，输出仅有 action。
-采用论文方法：使用 MLP 将数值数据投影到 LLM embedding 维度，然后拼接送入 LLM。
-"""
-
-from typing import Any, Optional
+import contextlib
+from typing import Optional
 
 import numpy as np
 import torch
@@ -30,10 +24,8 @@ class DecisionEmbeddingLayer(nn.Module):
         self._state_dim = state_dim
         self._action_dim = action_dim
         self._device = device
-        # 将所有参数移动到指定设备
         self.to(device)
 
-        # 状态 MLP: [state_dim] -> [embed_dim]
         self.state_mlp = nn.Sequential(
             nn.Linear(self._state_dim, self._embed_dim),
             nn.GELU(),
@@ -42,7 +34,6 @@ class DecisionEmbeddingLayer(nn.Module):
             nn.Linear(self._embed_dim, self._embed_dim),
         )
 
-        # 动作 MLP: [action_dim] -> [embed_dim]
         self.action_mlp = nn.Sequential(
             nn.Linear(self._action_dim, self._embed_dim),
             nn.GELU(),
@@ -51,7 +42,6 @@ class DecisionEmbeddingLayer(nn.Module):
             nn.Linear(self._embed_dim, self._embed_dim),
         )
 
-        # RTG MLP: [1] -> [embed_dim]
         self.rtg_mlp = nn.Sequential(
             nn.Linear(1, self._embed_dim),
             nn.GELU(),
@@ -66,57 +56,41 @@ class DecisionEmbeddingLayer(nn.Module):
         每个元素（RTG/状态/动作）整体投影为一个 token
 
         Args:
-            trajectory: Trajectory namedtuple
-                states: [T, state_dim]
-                actions: [T, action_dim]
-                rtgs: [T+1, 1]
-                timesteps: [T]
-                attention_mask: [T, action_dim]
+            trajectory: Trajectory namedtuple，各字段 shape [B, T, dim]
 
         Returns:
-            dt_embeddings: [1, seq_len, embed_dim]
+            dt_embeddings: [B, seq_len, embed_dim]
         """
         states = trajectory.states
         actions = trajectory.actions
         rtgs = trajectory.rtgs
 
-        # 转换为 tensor 并移动到设备上
-        states = torch.from_numpy(states).float().to(self._device)
-        actions = torch.from_numpy(actions).float().to(self._device)
-        rtgs = torch.from_numpy(rtgs).float().to(self._device)
-
         embeddings_list = []
 
-        # 1. 投影 rtgs (return-to-go): [T+1, 1] -> [T+1, 1, embed_dim]
-        # 保持 T+1 个 RTG
-        if rtgs.shape[0] > 0:
-            rtg_embedded = self.rtg_mlp(rtgs)  # [T+1, 1] -> [T+1, embed_dim]
-            rtg_embedded = rtg_embedded.unsqueeze(1)  # [T+1, 1, embed_dim]
+        if rtgs.shape[1] > 0:
+            rtg_embedded = self.rtg_mlp(rtgs)
+            rtg_embedded = rtg_embedded.unsqueeze(2)
             embeddings_list.append(rtg_embedded)
 
-        # 2. 投影 states: [T, state_dim] -> [T, 1, embed_dim]
-        # 每个时间步的状态作为一个 token（整体投影，不是打散成 state_dim 个）
         if states.numel() > 0:
-            states_embedded = self.state_mlp(states)  # [T, state_dim] -> [T, embed_dim]
-            states_embedded = states_embedded.unsqueeze(1)  # [T, 1, embed_dim]
+            states_embedded = self.state_mlp(states)
+            states_embedded = states_embedded.unsqueeze(2)
             embeddings_list.append(states_embedded)
 
-        # 3. 投影 actions: [T, 1] -> [T, 1, embed_dim]
         if actions.numel() > 0:
-            actions_embedded = self.action_mlp(actions)  # [T, 1] -> [T, embed_dim]
-            actions_embedded = actions_embedded.unsqueeze(1)  # [T, 1, embed_dim]
+            actions_embedded = self.action_mlp(actions)
+            actions_embedded = actions_embedded.unsqueeze(2)
             embeddings_list.append(actions_embedded)
 
-        # 在序列维度拼接: [T+1, 3, embed_dim]（RTG有T+1个，state和action各T个）
         if embeddings_list:
-            dt_embeddings = torch.cat(embeddings_list, dim=1)
-            # 压缩序列维度: [T+1, 3, embed_dim] -> [1, (T+1)*3, embed_dim]
-            T_plus_1 = dt_embeddings.shape[0]
-            dt_embeddings = dt_embeddings.view(1, T_plus_1 * 3, self._embed_dim)
+            dt_embeddings = torch.cat(embeddings_list, dim=2)
+            B, T_p1, _, E = dt_embeddings.shape
+            dt_embeddings = dt_embeddings.view(B, T_p1 * 3, E)
         else:
-            dt_embeddings = torch.zeros(1, 0, self._embed_dim, device=self._device)
+            B = states.shape[0]
+            dt_embeddings = torch.zeros(B, 0, self._embed_dim, device=self._device)
 
-        return dt_embeddings  # [1, seq_len, embed_dim]
+        return dt_embeddings
 
 
 class ActionHead(nn.Module):
@@ -138,7 +112,6 @@ class ActionHead(nn.Module):
         Returns:
             action: [batch, action_dim]
         """
-        # 取最后一个有效位置的隐藏状态
         return self.fc(last_hidden_state[:, -1, :])
 
 
@@ -146,21 +119,15 @@ class ActModel(BaseModel, nn.Module):
     """
     Act Model - 动作模型
 
-    对应原来的 LBMModel。
-    输入 prompt 和 numeral，输出仅有 action（response 为 None）。
+    输入 prompt 和 traj，输出仅有 action（response 为 None）。
 
     双输入：
     - prompt: str, 构建好的文本 prompt
-    - numeral: 二元组 (context_dict, Trajectory)
+    - traj: Trajectory
 
     双输出：
     - response: None
     - action: 预测的 pacer 值
-
-    融合方式（参考论文）：
-    1. 文本 prompt -> Tokenizer -> Token Embeddings
-    2. DT tuple -> Decision Embedding Layer -> DT Embeddings
-    3. 序列维度拼接后送入 LLM
     """
 
     def __init__(
@@ -172,9 +139,6 @@ class ActModel(BaseModel, nn.Module):
         device: str = 'cuda',
         temperature: float = 0.0,
         max_tokens: int = 1024,
-        # DT 归一化参数
-        state_mean: Optional[np.ndarray] = None,
-        state_std: Optional[np.ndarray] = None,
     ):
         super().__init__()
         self._model_path = model_path
@@ -186,42 +150,25 @@ class ActModel(BaseModel, nn.Module):
         self._action_dim = action_dim
         self._output_mode = 'pacer'
 
-        # 初始化归一化参数（保持在 CPU 上用 numpy 操作，避免设备转换开销）
-        if state_mean is None:
-            state_mean = np.zeros(state_dim, dtype=np.float32)
-        if state_std is None:
-            state_std = np.ones(state_dim, dtype=np.float32)
-        self._state_mean = torch.from_numpy(state_mean.astype(np.float32)).to(device)
-        self._state_std = torch.from_numpy(state_std.astype(np.float32)).to(device)
+        self.register_buffer('_state_mean', torch.zeros(state_dim, dtype=torch.float32))
+        self.register_buffer('_state_std', torch.ones(state_dim, dtype=torch.float32))
 
-        # 占位符属性，与策略兼容
         self._target_rtg = 0.0
         self._scale = 1.0
 
-        # 加载 tokenizer
-        from transformers import AutoTokenizer
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            model_path,
-            trust_remote_code=True,
-        )
+        if model_type != 'transformers':
+            raise ValueError(f'不支持的模型类型: {model_type}')
+        else:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            self._tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+            self._llm = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True, device_map=device)
+            self._llm.get_input_embeddings().requires_grad_(False)
 
-        # 获取 LLM backbone
-        from transformers import AutoModelForCausalLM
-        self._llm = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            trust_remote_code=True,
-            device_map=device,
-        )
-        self._llm.eval()
+        self._state_mean = self._state_mean.to(device)
+        self._state_std = self._state_std.to(device)
 
-        # 从 LLM 配置中获取 embedding 维度
         llm_hidden_size = self._llm.config.hidden_size
 
-        # 禁用 LLM 的梯度计算
-        for param in self._llm.parameters():
-            param.requires_grad = False
-
-        # 构建 Decision Embedding Layer
         self._decision_embedding = DecisionEmbeddingLayer(
             llm_embedding_dim=llm_hidden_size,
             state_dim=state_dim,
@@ -229,114 +176,121 @@ class ActModel(BaseModel, nn.Module):
             device=device,
         )
 
-        # 构建 Action Head
         self._action_head = ActionHead(
             hidden_size=llm_hidden_size,
             action_dim=action_dim,
         )
 
-        # 将所有模块移动到指定设备
         self._decision_embedding.to(device)
         self._action_head.to(device)
 
+    def set_normalize(self, state_mean: np.ndarray, state_std: np.ndarray) -> 'ActModel':
+        self._state_mean = torch.tensor(state_mean, dtype=torch.float32, device=self._device)
+        self._state_std = torch.tensor(state_std, dtype=torch.float32, device=self._device)
+        return self
+
+    def load_model(self, model_path: str) -> 'ActModel':
+        ckpt = torch.load(model_path, map_location=self._device, weights_only=False)
+        state_dict = ckpt['model_state_dict']
+
+        if '_state_mean' not in state_dict:
+            state_dict['_state_mean'] = self._state_mean.to(self._device)
+        if '_state_std' not in state_dict:
+            state_dict['_state_std'] = self._state_std.to(self._device)
+
+        self.load_state_dict(state_dict)
+        return self
+
     def predict(
         self,
-        prompt: Optional[str],
-        numeral: Optional[Any] = None
-    ) -> tuple[Optional[str], Optional[Any]]:
+        prompt: str,
+        traj: Trajectory,
+        context = None,
+    ) -> tuple[None, np.ndarray]:
         """
-        根据文本 prompt 和 numeral 预测动作
+        单样本预测。
 
         Args:
-            prompt: 文本 prompt（忽略）
-            numeral: 二元组 (context_dict, Trajectory)
-                - context_dict: 原始 dict（用于兼容接口，ActModel 不使用）
-                - trajectory: Trajectory namedtuple
-
-        Returns:
-            (None, action): response 为 None，action 是预测的 pacer 值
+            prompt: 文本 prompt
+            context: 忽略此参数（保留接口兼容性）
+            traj: Trajectory
         """
-        if numeral is None:
-            raise ValueError("ActModel requires numeral input")
+        traj = traj._replace(
+            states=np.expand_dims(traj.states, axis=0),
+            actions=np.expand_dims(traj.actions, axis=0),
+            rtgs=np.expand_dims(traj.rtgs, axis=0),
+            timesteps=np.expand_dims(traj.timesteps, axis=0),
+            attention_mask=np.expand_dims(traj.attention_mask, axis=0),
+        )
+        _, action = self.predict_batch(prompts=[prompt], contexts=None, traj=traj)
+        return None, action[0]
 
-        text_prompt = prompt if prompt is not None else ""
-
-        # 解包二元组 (context_dict, Trajectory)
-        _, trajectory = numeral
-
-        # 归一化 states
-        states = (trajectory.states - self._state_mean.cpu().numpy()) / (self._state_std.cpu().numpy() + 1e-9)
-        trajectory = trajectory._replace(states=states)
-
-        # 前向传播
-        action = self._forward(text_prompt, trajectory)
-        # 确保返回 numpy array
-        action = action.detach().cpu().numpy()
-        return None, action
-
-    def _forward(self, text_prompt: str, trajectory: Trajectory) -> torch.Tensor:
+    def predict_batch(
+        self,
+        prompts: list[str],
+        traj: Trajectory,
+        contexts = None,
+    ) -> tuple[None, np.ndarray]:
         """
-        前向传播
+        批量预测。
 
         Args:
-            text_prompt: str
-            trajectory: Trajectory namedtuple
+            prompts: list of text prompts
+            contexts: 忽略此参数（保留接口兼容性）
+            traj: batched Trajectory
+        """
+        traj = traj._replace(
+            states=torch.from_numpy(traj.states).to(self._device),
+            actions=torch.from_numpy(traj.actions).to(self._device),
+            rtgs=torch.from_numpy(traj.rtgs).to(self._device),
+            timesteps=torch.from_numpy(traj.timesteps).to(self._device),
+            attention_mask=torch.from_numpy(traj.attention_mask).to(self._device),
+        )
+
+        state_mean = self._state_mean
+        state_std = self._state_std
+        states = (traj.states - state_mean) / (state_std + 1e-9)
+        traj = traj._replace(states=states)
+
+        action = self._forward_batch(prompts, traj)
+        return None, action.detach().cpu().numpy()
+
+    def _forward_batch(self, text_prompts: list[str], trajectory: Trajectory) -> torch.Tensor:
+        """
+        批量前向传播
+
+        Args:
+            text_prompts: list[str]，每个样本一个 prompt
+            trajectory: Trajectory namedtuple，各字段 shape [B, T, dim]
 
         Returns:
-            action: tensor
+            action: [B]
         """
-        # 1. 文本 -> Token Embeddings
-        text_embeds = self._tokenize(text_prompt)
-
-        # 2. Trajectory -> Decision Embeddings
-        dt_embeds = self._decision_embedding(trajectory)
-
-        # 3. 序列维度拼接
-        combined_embeds = torch.cat([text_embeds, dt_embeds], dim=1)
-
-        # 4. 通过 LLM 获取 hidden states
-        with torch.no_grad():
+        context = torch.no_grad() if not self.training else contextlib.nullcontext()
+        with context:
+            text_embeds = self._tokenize_batch(text_prompts)
+            dt_embeds = self._decision_embedding(trajectory)
+            combined_embeds = torch.cat([text_embeds, dt_embeds], dim=1)
             outputs = self._llm(
                 inputs_embeds=combined_embeds,
                 return_dict=True,
                 output_hidden_states=True,
             )
+            last_hidden_state = outputs.hidden_states[-1]
+            action = self._action_head(last_hidden_state)
+            return action
 
-        # 5. 从最后一层 hidden states 解码动作
-        last_hidden_state = outputs.hidden_states[-1]
-        action = self._action_head(last_hidden_state)
-
-        return action[0, 0]  # 返回标量
-
-    def _tokenize(self, text: str) -> torch.Tensor:
+    def _tokenize_batch(self, texts: list[str]) -> torch.Tensor:
         """
         将文本 prompt 转换为 token embeddings
 
         Args:
-            text: str
+            texts: list[str]
 
         Returns:
-            embeddings: [1, seq_len, embed_dim]
+            embeddings: [B, seq_len, embed_dim]
         """
-        # 使用 tokenizer 获取 input_ids
-        inputs = self._tokenizer(text, return_tensors='pt', padding=True)
+        inputs = self._tokenizer(texts, return_tensors='pt', padding=True, truncation=True)
         input_ids = inputs.input_ids.to(self._device)
-
-        # 获取 token embeddings
         token_embeddings = self._llm.get_input_embeddings()(input_ids)
-
         return token_embeddings
-
-    def get_text_response(self, text_prompt: str, trajectory: Trajectory) -> str:
-        """
-        获取 LLM 的文本响应（用于推理过程）
-
-        Args:
-            text_prompt: str
-            trajectory: Trajectory namedtuple
-
-        Returns:
-            text_response: str
-        """
-        # 简化的文本生成（不实际调用，用于 debug）
-        return ""

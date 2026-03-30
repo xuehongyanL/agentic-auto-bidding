@@ -1,12 +1,7 @@
-"""
-ThinkModel 实现
-
-对应原来的 LLMModel，输入仅有 numeral（prompt 在内部构造），输出仅有 response。
-只负责推理后端的定义和调用，不负责 prompt 构造和 context 结构假设。
-"""
-
+from abc import abstractmethod
 from typing import Any, Optional
 
+from agb_core.data.trajectory import Trajectory
 from agb_core.infer.llm_backend import BaseLLMBackend
 from agb_core.model.base_model import BaseModel
 
@@ -15,10 +10,10 @@ class ThinkModel(BaseModel):
     """
     Think Model - 思考模型
 
-    输入 numeral，在内部构造 prompt，输出文本响应 response。
+    输入 context，在内部构造 prompt，输出文本响应 response。
     不输出动作（action 为 None）。
 
-    子类需要实现 _build_prompt 方法来根据 numeral 构建 prompt。
+    子类需要实现 _build_prompt 方法来根据 context 构建 prompt。
     """
 
     def __init__(
@@ -34,34 +29,68 @@ class ThinkModel(BaseModel):
         self._output_mode = 'pacer'
         self._verbose = verbose
 
-
     def predict(
         self,
-        prompt: Optional[str],
-        numeral: Optional[Any] = None
-    ) -> tuple[Optional[str], Optional[Any]]:
+        context: dict,
+        prompt = None,
+        traj = None,
+    ) -> tuple[str, Any]:
         """
-        根据 numeral 在内部构造 prompt，调用 LLM 获取响应
+        根据 context 在内部构造 prompt，调用 LLM 获取响应
 
         Args:
+            context: 上下文字典，用于内部构造 prompt
             prompt: 忽略此参数（保留接口兼容性）
-            numeral: 数值输入，用于内部构造 prompt
+            traj: Trajectory（保留，暂未使用）
 
         Returns:
             (response, None): response 是 LLM 的文本响应，action 为 None
         """
-        # 在内部根据 numeral 构造 prompt
-        internal_prompt = self._build_prompt(numeral)
-        # 调用 LLM 获取响应
-        response = self._call_llm(internal_prompt)
-        return response, None
+        responses, actions = self.predict_batch([context])
+        return responses[0], actions[0]
 
-    def _build_prompt(self, numeral: Any) -> str:
+    def predict_batch(
+        self,
+        contexts: list[dict],
+        prompts = None,
+        traj = None,
+    ) -> tuple[list[str], list[Any]]:
         """
-        根据 numeral 构造 prompt
+        Batch predict for multiple samples.
 
         Args:
-            numeral: 数值输入
+            prompts: list of prompts (ignored)
+            contexts: list of context dicts，用于内部构造 prompts
+            traj: batched Trajectory（保留，暂未使用）
+
+        Returns:
+            (responses, actions): list of LLM text responses, list of parsed actions
+        """
+        messages_list = []
+        for context in contexts:
+            internal_prompt = self._build_prompt(context)
+            system_prompt = self._get_system_prompt()
+            if system_prompt:
+                messages = [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': internal_prompt},
+                ]
+            else:
+                messages = [{'role': 'user', 'content': internal_prompt}]
+            messages_list.append(messages)
+
+        responses = self._llm_backend.generate_batch(messages_list)
+
+        actions = [self._parse_response(r) for r in responses]
+        return responses, actions
+
+    @abstractmethod
+    def _build_prompt(self, context: dict) -> str:
+        """
+        根据 context 构造 prompt
+
+        Args:
+            context: 上下文字典
 
         Returns:
             构建好的 prompt 字符串
@@ -69,8 +98,9 @@ class ThinkModel(BaseModel):
         Note:
             子类应该重写此方法来实现具体的 prompt 构造逻辑
         """
-        raise NotImplementedError
+        pass
 
+    @abstractmethod
     def _get_system_prompt(self) -> str:
         """
         获取 system prompt
@@ -81,7 +111,12 @@ class ThinkModel(BaseModel):
         Note:
             子类应该重写此方法来返回各自的 system prompt
         """
-        return ""
+        pass
+
+    @abstractmethod
+    def _parse_response(self, response: str):
+        """解析 LLM 响应，基类返回 None，子类可覆盖"""
+        pass
 
     def _call_llm(self, prompt: str) -> str:
         system_prompt = self._get_system_prompt()
