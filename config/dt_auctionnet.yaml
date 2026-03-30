@@ -29,7 +29,7 @@ strategy:
 
 env:
   name: AuctionNetEnv
-  data_path: /DATA/xuehy/ad/AAB/data/traffic/period-7.csv
+  data_path: /DATA/xuehy/ad/AAB/data/traffic/sparse/period-7.csv
   min_remaining_budget: 0.1
 
 device: cuda
