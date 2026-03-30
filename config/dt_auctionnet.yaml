@@ -1,6 +1,7 @@
 model:
   name: DTModel
   path: /DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/500000.pt
+  normalize_dict_path: /DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/normalize_dict.pkl
   hidden_size: 512
   n_layer: 8
   n_head: 16
@@ -9,7 +10,6 @@ model:
   target_rtg: 4.0
   output_mode: price
   max_timestep_len: 96
-  normalize_dict_path: /DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/normalize_dict.pkl
   block_config:
     n_ctx: 1024
     n_embd: 512

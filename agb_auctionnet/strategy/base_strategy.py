@@ -2,7 +2,7 @@
 AuctionNet 基础策略实现
 
 维护历史上下文并调用 model 输出 pacer。
-所有情况下的 numeral 都是 (原始 dict, Trajectory)。
+所有情况下的 context 都是原始 dict，traj 都是 Trajectory。
 """
 
 from typing import Any
@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 
 from agb_core.data.trajectory import Trajectory
-from agb_core.model.base_model import BaseModel
+from agb_core.model.base_model import DecisionModel
 from agb_core.strategy.base_strategy import BaseStrategy
 
 
@@ -24,10 +24,8 @@ class AuctionNetBaseStrategy(BaseStrategy):
 
     def __init__(
         self,
-        model: BaseModel,
+        model: DecisionModel,
         window_size: int = 20,
-        state_mean: np.ndarray | None = None,
-        state_std: np.ndarray | None = None,
     ):
         super().__init__(model)
 
@@ -36,14 +34,6 @@ class AuctionNetBaseStrategy(BaseStrategy):
         # 从 model 获取 state_dim 和 action_dim
         self._state_dim = model._state_dim
         self._action_dim = model._action_dim
-
-        # 状态归一化参数（AuctionNet 专属）
-        if state_mean is None:
-            state_mean = np.zeros(self._state_dim, dtype=np.float32)
-        if state_std is None:
-            state_std = np.ones(self._state_dim, dtype=np.float32)
-        self._state_mean = state_mean.astype(np.float32)
-        self._state_std = state_std.astype(np.float32)
 
         # 历史统计信息
         self._history_bid_mean: list[float] = []
@@ -118,7 +108,17 @@ class AuctionNetBaseStrategy(BaseStrategy):
 
     def bidding(self) -> tuple:
         """构建二元组 context 并调用模型"""
-        # 为下一步 append 0 (统一为 array 模式)
+        context_dict, dt_input = self.pre_bidding()
+        response, action = self._model.predict(context=context_dict, traj=dt_input)
+        return self.post_bidding(response, action)
+
+    def pre_bidding(self) -> tuple:
+        """
+        Bidding 预处理：构建 context_dict 和 Trajectory，供批量调用使用。
+
+        Returns:
+            (context_dict, dt_input): 供模型输入的二元组
+        """
         self._history_actions.append([0.] * self._action_dim)
 
         context_dict = self._build_context()
@@ -139,23 +139,29 @@ class AuctionNetBaseStrategy(BaseStrategy):
 
         # 构建 DT 多元组
         dt_input = self._build_model_input()
+        return context_dict, dt_input
 
-        # 二元组：(原始 dict, DT 多元组)
-        response, action = self._model.predict(None, (context_dict, dt_input))
+    def post_bidding(self, response, action) -> tuple:
+        """
+        Bidding 后处理：将模型输出的 action 转换为 pacer 并更新历史。
 
-        # 根据 output_mode 判断是否需要转换：'price' 需要除以 cpa_constraint 得到 pacer
+        Args:
+            response: 模型文本响应（仅用于日志，忽略）
+            action: 模型预测的动作
+
+        Returns:
+            (response, pacer)
+        """
         if self._model._output_mode == 'price':
             pacer = action / self._cpa_constraint
         else:
             pacer = action
 
-        # 确保 pacer 是一维 numpy array
         pacer = pacer.flatten()
-
         self._last_pacer = pacer
         self._history_actions[-1] = action.tolist()
         self._history_pacers.append(pacer)
-        return response, pacer
+        return None, pacer
 
     def _calc_rtg(self) -> float:
         """计算当前 rtg"""
@@ -205,11 +211,6 @@ class AuctionNetBaseStrategy(BaseStrategy):
             rtgs = np.array(self._history_rtgs[-self._window_size:], dtype=np.float32).reshape(-1, 1)
             timesteps = np.arange(T - self._window_size, T, dtype=np.int64)
             attention_mask = np.ones((self._window_size, self._action_dim), dtype=np.int64)
-
-        # 状态归一化（只对有效数据，padding 部分保持为 0）
-        # 通过 np.max 现场计算 timestep_mask
-        valid_mask = np.max(attention_mask, axis=-1, keepdims=True)  # (window_size, 1)
-        states = np.where(valid_mask == 1, (states - self._state_mean) / (self._state_std + 1e-9), states)
 
         return Trajectory(states, actions, rtgs, timesteps, attention_mask)
 
@@ -302,3 +303,97 @@ class AuctionNetBaseStrategy(BaseStrategy):
             return 0.0
         last_n = data[max(0, len(data) - n):]
         return sum(last_n) / len(last_n)
+
+
+class AuctionNetMultiStrategy:
+    """
+    多环境并行策略封装，维护多个 AuctionNetBaseStrategy 上下文。
+
+    关键优化：多个环境同时 bidding 时，所有 context 收集后通过
+    model.predict_batch() 一次性调用模型，避免 N 次串行调用。
+    """
+
+    def __init__(
+        self,
+        model: DecisionModel,
+        n_strategies: int,
+        window_size: int = 20,
+    ):
+        """
+        Args:
+            model: 模型实例（所有子策略共享同一模型）
+            n_strategies: 并行策略数量
+            window_size: 历史窗口大小
+        """
+        self._model = model
+        self._n = n_strategies
+        self._strategies = [
+            AuctionNetBaseStrategy(model, window_size=window_size)
+            for _ in range(n_strategies)
+        ]
+
+    def reset(self) -> None:
+        """重置所有子策略"""
+        for s in self._strategies:
+            s.reset()
+
+    def set_episode_info_batch(self, reset_infos: list[dict[str, Any]]) -> None:
+        """
+        批量设置 episode 信息。
+
+        Args:
+            reset_infos: list of reset info dicts，与策略顺序对应
+        """
+        for i, info in enumerate(reset_infos):
+            self._strategies[i].set_episode_info(
+                budget=info['budget'],
+                cpa_constraint=info['cpa_constraint'],
+                num_timesteps=info['num_timesteps'],
+                first_pvalue_mean=info['first_pvalue_mean'],
+                first_pv_num=info['first_pv_num'],
+            )
+
+    def bidding(self) -> list[tuple]:
+        """
+        批量 bidding：调用 pre_bidding 收集所有上下文，一次模型调用，post_bidding 分布结果。
+
+        Returns:
+            list of (response, pacer) tuples
+        """
+        # 预处理：构建所有 context 和 trajectory
+        context_dicts = []
+        trajectories = []
+        for s in self._strategies:
+            context_dict, dt_input = s.pre_bidding()
+            context_dicts.append(context_dict)
+            trajectories.append(dt_input)
+
+        # 批量模型调用
+        from agb_core.data.trajectory import Trajectory
+        merged_traj = Trajectory(
+            states=np.stack([t.states for t in trajectories]),
+            actions=np.stack([t.actions for t in trajectories]),
+            rtgs=np.stack([t.rtgs for t in trajectories]),
+            timesteps=np.stack([t.timesteps for t in trajectories]),
+            attention_mask=np.stack([t.attention_mask for t in trajectories]),
+        )
+        _, actions_list = self._model.predict_batch(contexts=context_dicts, traj=merged_traj)
+
+        # 后处理：转换并返回
+        results = []
+        for i, s in enumerate(self._strategies):
+            results.append(s.post_bidding(None, actions_list[i]))
+        return results
+
+    def update_batch(self, env_step_results: list[dict[str, Any]]) -> None:
+        """
+        批量 update：更新所有子策略。
+
+        Args:
+            env_step_results: list of env step result dicts
+        """
+        if len(env_step_results) != self._n:
+            raise ValueError(f"Expected {self._n} results, got {len(env_step_results)}")
+        for i, result in enumerate(env_step_results):
+            self._strategies[i].update(result)
+

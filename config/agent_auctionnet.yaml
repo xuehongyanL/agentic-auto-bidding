@@ -1,22 +1,22 @@
 model:
-  think_model:
+  think:
     name: AuctionNetThinkModel
     verbose: 0
     llm_backend:
-      type: transformers
-      model_path: /DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct
-      temperature: 0.0
-      max_tokens: 1024
-      stop: []
-      device: cuda
-
-      # type: vllm
+      # type: transformers
       # model_path: /DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct
       # temperature: 0.0
       # max_tokens: 1024
       # stop: []
-      # tensor_parallel_size: 1
-      # gpu_memory_utilization: 0.9
+      # device: cuda:0
+
+      type: vllm
+      model_path: /DATA/xuehy/agent/models/Qwen/Qwen2.5-3B-Instruct
+      temperature: 0.0
+      max_tokens: 1024
+      stop: []
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.9
 
       # type: openai
       # model_path: gpt-4o
@@ -26,21 +26,46 @@ model:
       # base_url: https://api.openai.com/v1
       # api_key: YOUR_API_KEY
       # timeout: 120.0
-  act_model:
+  act:
     name: ActModel
     path: /DATA/xuehy/agent/models/Qwen/Qwen2.5-0.5B-Instruct
     backend: transformers
-    normalize_dict_path: /DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/normalize_dict.pkl
+    device: cuda:1
 
-strategy:
-  name: AuctionNetBaseStrtegy
+task:
   state_dim: 16
   action_dim: 1
-  window_size: 20
+  window_size: 10
 
-env:
-  name: AuctionNetEnv
-  data_path: /DATA/xuehy/ad/AAB/data/traffic/period-7.csv
-  min_remaining_budget: 0.1
+train:
+  act:
+    data_path: /DATA/xuehy/ad/AAB/data/trajectory/sparse_pacer/part_{0..3}_thought.pkl
+    optimizer: AdamW
+    learning_rate: 0.00001
+    batch_size: 16
+    grad_accum_steps: 1
+    n_step: 400000
+    eval_interval: null
+    log_interval: 100
+    save_interval: 1000
+    filter_thoughts:
+      mode: nonconflict  # match | nonconflict | any
+      default_action: 1.0
+
+infer:
+  strategy:
+    name: AuctionNetBaseStrtegy
+  valid:
+    env:
+      name: AuctionNetEnv
+      data_path: /DATA/xuehy/ad/AAB/data/traffic/period-7.csv
+      min_remaining_budget: 0.1
+  test:
+    env:
+      name: AuctionNetEnv
+      data_path: /DATA/xuehy/ad/AAB/data/traffic/sparse/period-{8..13}.csv
+      min_remaining_budget: 0.1
+    think_batch_size: 96
+    act_batch_size: 16
 
 device: cuda

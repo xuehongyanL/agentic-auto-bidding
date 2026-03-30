@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 import numpy as np
 
+from agb_core.data.trajectory import Trajectory
 from agb_core.infer.llm_backend import BaseLLMBackend
 from agb_core.model.think_model import ThinkModel
 
@@ -34,43 +35,71 @@ class AuctionNetThinkModel(ThinkModel):
 
     def predict(
         self,
-        prompt: Optional[str],
-        numeral: Optional[Any] = None
-    ) -> tuple[Optional[str], Optional[Any]]:
+        context: dict,
+        prompt = None,
+        traj = None,
+    ) -> tuple[str, np.ndarray]:
         """
-        根据上下文预测 pacer
+        根据 context 预测 pacer
 
         Args:
-            prompt: 忽略此参数（保留接口兼容性），prompt 在内部构造
-            numeral: 二元组 (context_dict, Trajectory)
-                - 第一个元素：原始 dict（来自 base_strategy 的 _build_context）
-                - 第二个元素：Trajectory namedtuple (states, actions, rtgs, timesteps, attention_mask)
+            prompt: 忽略此参数（保留接口兼容性）
+            context: context_dict，来自 base_strategy 的 _build_context
+            traj: Trajectory（保留，暂未使用）
 
         Returns:
             (response, action): response 是 LLM 的文本响应，action 是方向值（-1/0/1）
         """
-        # 调用父类获取 response
-        response, _ = super().predict(prompt, numeral)
-
-        # 解析 response 得到 action
+        response, _ = super().predict(context=context)
         action = self._parse_response(response)
-
         return response, action
 
-    def _build_prompt(self, numeral: Any) -> str:
+    def predict_batch(
+        self,
+        contexts: list[dict],
+        prompts = None,
+        traj = None,
+    ) -> tuple[list[str], list[Any]]:
         """
-        根据 numeral（二元组）构建 prompt
+        Batch predict for multiple samples.
 
         Args:
-            numeral: 二元组 (context_dict, Trajectory)
+            prompts: list of prompts (ignored)
+            contexts: list of context dicts
+            traj: batched Trajectory（保留，暂未使用）
 
         Returns:
-            user_prompt 字符串（由 _call_llm 自动应用 chat template）
+            (responses, actions): list of LLM text responses, list of direction action arrays
         """
-        # 解包二元组
-        context_dict, dt_input = numeral
+        messages_list = []
+        for context in contexts:
+            internal_prompt = self._build_prompt(context)
+            system_prompt = self._get_system_prompt()
+            if system_prompt:
+                messages = [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': internal_prompt},
+                ]
+            else:
+                messages = [{'role': 'user', 'content': internal_prompt}]
+            messages_list.append(messages)
 
-        return self._format_user_prompt(context_dict)
+        responses = self._llm_backend.generate_batch(messages_list)
+
+        actions = [self._parse_response(r) for r in responses]
+        return responses, actions
+
+    def _build_prompt(self, context: dict) -> str:
+        """
+        根据 context 字典构建 prompt
+
+        Args:
+            context: context_dict，来自 base_strategy 的 _build_context
+
+        Returns:
+            user_prompt 字符串
+        """
+        return self._format_user_prompt(context)
 
     def _format_user_prompt(self, context_dict: dict[str, Any]) -> str:
         """根据 context_dict 构建用户 prompt"""
@@ -96,7 +125,6 @@ class AuctionNetThinkModel(ThinkModel):
         total_cost_list = history_total_cost[start_idx:num_history]
 
         # 计算 time_left_list: (num_timesteps - step) / num_timesteps
-        # step 索引从 start_idx 到 num_history - 1
         time_left_list = [(num_timesteps - step) / num_timesteps for step in range(start_idx, num_history)]
 
         # 计算 budget_left_list: (budget - total_cost) / budget

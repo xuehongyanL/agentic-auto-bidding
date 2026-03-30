@@ -8,6 +8,7 @@ generate(messages) -> str
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
+import torch
 from openai import OpenAI
 
 
@@ -20,7 +21,19 @@ class BaseLLMBackend(ABC):
         Returns:
             generated text
         """
-        raise NotImplementedError
+        pass
+
+    @abstractmethod
+    def generate_batch(self, messages_list: list[list[dict[str, str]]]) -> list[str]:
+        """
+        Batch generate for multiple prompts simultaneously.
+
+        Args:
+            messages_list: list of message lists, each as [{'role': ..., 'content': ...}]
+        Returns:
+            list of generated texts
+        """
+        pass
 
 
 class VLLMBackend(BaseLLMBackend):
@@ -44,6 +57,12 @@ class VLLMBackend(BaseLLMBackend):
         self._llm: Any = None
         self._load_model()
 
+    def __del__(self):
+        """销毁 vLLM 创建的 PyTorch distributed 进程组，避免程序退出时 warn."""
+        import torch.distributed as dist
+        if dist.is_initialized():
+            dist.destroy_process_group()
+
     def _load_model(self) -> None:
         from vllm import LLM
         self._llm = LLM(
@@ -54,21 +73,28 @@ class VLLMBackend(BaseLLMBackend):
         )
 
     def generate(self, messages: list[dict[str, str]]) -> str:
+        results = self.generate_batch([messages])
+        return results[0]
+
+    def generate_batch(self, messages_list: list[list[dict[str, str]]]) -> list[str]:
         from vllm import SamplingParams
 
         tokenizer = self._llm.get_tokenizer()
-        prompt = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
+        prompts = [
+            tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            for messages in messages_list
+        ]
         sampling_params = SamplingParams(
             temperature=self._temperature,
             max_tokens=self._max_tokens,
             stop=self._stop or ['<|end|>', '<|eot|>'],
         )
-        outputs = self._llm.generate([prompt], sampling_params)
-        return outputs[0].outputs[0].text
+        outputs = self._llm.generate(prompts, sampling_params)
+        return [out.outputs[0].text for out in outputs]
 
 
 class TransformersBackend(BaseLLMBackend):
@@ -104,27 +130,53 @@ class TransformersBackend(BaseLLMBackend):
         )
 
     def generate(self, messages: list[dict[str, str]]) -> str:
-        inputs = self._tokenizer.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_tensors='pt',
-        ).to(self._device)
-        if self._tokenizer.pad_token_id is not None:
-            pad_id = self._tokenizer.pad_token_id
-        else:
-            pad_id = self._tokenizer.eos_token_id
-        attention_mask = inputs.ne(pad_id)
+        results = self.generate_batch([messages])
+        return results[0]
+
+    def generate_batch(self, messages_list: list[list[dict[str, str]]]) -> list[str]:
+        input_ids_list = []
+        for messages in messages_list:
+            input_ids = self._tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_tensors='pt',
+            )
+            input_ids = input_ids.to(self._device)
+            input_ids_list.append(input_ids)
+
+        # Pad to same length
+        max_len = max(ids.shape[1] for ids in input_ids_list)
+        pad_id = self._tokenizer.pad_token_id or self._tokenizer.eos_token_id
+        padded_input_ids = []
+        padded_attention_masks = []
+        for input_ids in input_ids_list:
+            pad_len = max_len - input_ids.shape[1]
+            if pad_len > 0:
+                pad_tensor = input_ids.new_full((1, pad_len), pad_id)
+                padded_input_ids.append(torch.cat([pad_tensor, input_ids], dim=1))
+                padded_attention_masks.append(torch.cat([input_ids.new_zeros((1, pad_len)), torch.ones_like(input_ids)], dim=1))
+            else:
+                padded_input_ids.append(input_ids)
+                padded_attention_masks.append(torch.ones_like(input_ids))
+
+        batch_input_ids = torch.cat(padded_input_ids, dim=0)
+        batch_attention_mask = torch.cat(padded_attention_masks, dim=0)
+
         output_ids = self._model.generate(
-            inputs,
-            attention_mask=attention_mask,
+            batch_input_ids,
+            attention_mask=batch_attention_mask,
             max_new_tokens=self._max_tokens,
             temperature=self._temperature,
             do_sample=self._temperature > 0,
         )
-        input_len = inputs.shape[1]
-        response_ids = output_ids[0][input_len:]
-        return self._tokenizer.decode(response_ids, skip_special_tokens=True)
+
+        results = []
+        for i, input_ids in enumerate(input_ids_list):
+            input_len = input_ids.shape[1]
+            response_ids = output_ids[i][input_len:]
+            results.append(self._tokenizer.decode(response_ids, skip_special_tokens=True))
+        return results
 
 
 class OpenAIBackend(BaseLLMBackend):
@@ -156,3 +208,6 @@ class OpenAIBackend(BaseLLMBackend):
         if self._temperature > 0:
             kwargs['temperature'] = self._temperature
         return self._client.chat.completions.create(**kwargs).choices[0].message.content
+
+    def generate_batch(self, messages_list: list[list[dict[str, str]]]) -> list[str]:
+        raise NotImplementedError('OpenAIBackend does not support batch generation')

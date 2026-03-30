@@ -1,6 +1,7 @@
 """Dataset基类定义"""
 
-import torch
+from abc import abstractmethod
+
 from torch.utils.data import Dataset
 
 from agb_core.data.trajectory import Trajectory
@@ -13,8 +14,10 @@ class BaseDataset(Dataset):
         self._state_dim = state_dim
         self._action_dim = action_dim
 
+    @abstractmethod
     def __getitem__(self, index: int) -> tuple[Trajectory, str]:
-        raise NotImplementedError
+        pass
 
+    @abstractmethod
     def __len__(self) -> int:
-        raise NotImplementedError
+        pass

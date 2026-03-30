@@ -1,4 +1,5 @@
 import argparse
+import os
 import pickle
 
 import yaml
@@ -6,6 +7,7 @@ import yaml
 from agb_auctionnet.env.auctionnet_env import AuctionNetEnv
 from agb_auctionnet.strategy.base_strategy import AuctionNetBaseStrategy
 from agb_core.model.dt_model import DTModel
+from agb_core.utils.path import glob_data_paths
 
 
 def main():
@@ -16,10 +18,8 @@ def main():
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
 
-    with open(config['model']['normalize_dict_path'], 'rb') as f:
-        normalize_dict = pickle.load(f)
-
-    env = AuctionNetEnv(data_filename=config['env']['data_path'])
+    data_filenames = [str(p) for p in glob_data_paths(config['env']['data_path'])]
+    env = AuctionNetEnv(data_filenames=data_filenames)
 
     model = DTModel(
         state_dim=config['strategy']['state_dim'],
@@ -36,11 +36,16 @@ def main():
         max_timestep_len=config['model']['max_timestep_len'],
     ).load_model(config['model']['path'])
 
+    # 从 normalize_dict.pkl 导入归一化参数（向后兼容旧 checkpoint；
+    # 新 checkpoint 的 buffers 已嵌在 state_dict 中，无需此步）
+    if normalize_dict_path := config['model'].get('normalize_dict_path'):
+        with open(normalize_dict_path, 'rb') as f:
+            normalize_dict = pickle.load(f)
+        model.set_normalize(normalize_dict['state_mean'], normalize_dict['state_std'])
+
     strategy = AuctionNetBaseStrategy(
         model,
         window_size=config['strategy']['window_size'],
-        state_mean=normalize_dict['state_mean'],
-        state_std=normalize_dict['state_std'],
     )
 
     keys = env.keys()

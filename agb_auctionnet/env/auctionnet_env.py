@@ -25,17 +25,17 @@ class AuctionNetEnv(OfflineEnv):
 
     def __init__(
         self,
-        data_filename: str,
+        data_filenames: list[str],
         min_remaining_budget: float = 0.1,
     ):
         """
         初始化 AuctionNet 环境
 
         Args:
-            data_filename: 数据文件路径（CSV 或 PKL）
+            data_filenames: 数据文件路径列表（CSV 或 PKL）
             min_remaining_budget: 最小剩余预算阈值，低于此值时停止出价
         """
-        self._data_filename = data_filename
+        self._data_filenames = list(data_filenames)
         self._min_remaining_budget = min_remaining_budget
 
         # 数据存储
@@ -59,11 +59,11 @@ class AuctionNetEnv(OfflineEnv):
         self._load_data()
 
     def _load_data(self) -> None:
-        """加载单个数据文件"""
-        if not os.path.exists(self._data_filename):
-            raise ValueError(f"Data file not found: {self._data_filename}")
-
-        self._load_file(self._data_filename)
+        """加载多个数据文件"""
+        for path in self._data_filenames:
+            if not os.path.exists(path):
+                raise ValueError(f"Data file not found: {path}")
+            self._load_file(path)
 
     def _load_file(self, file_path: str) -> None:
         """加载单个数据文件"""
@@ -295,3 +295,81 @@ class AuctionNetEnv(OfflineEnv):
     @property
     def cpa_constraint(self) -> float:
         return self._cpa_constraint
+
+
+class AuctionNetMultiEnv:
+    """
+    多环境并行封装，同步管理多个 AuctionNetEnv 实例。
+
+    保持与 AuctionNetEnv 相同的 key 系统，但 reset/step 输入输出均为 list。
+    数据文件只加载一次，所有子环境共享。
+    """
+
+    def __init__(
+        self,
+        n_envs: int,
+        data_filenames: list[str],
+        min_remaining_budget: float = 0.1,
+    ):
+        """
+        Args:
+            n_envs: 并行环境数量
+            data_filenames: 数据文件路径列表（CSV 或 PKL）
+            min_remaining_budget: 最小剩余预算阈值
+        """
+        self._n_envs = n_envs
+        # 第一个 env 加载数据，其余 env 共享其数据字典
+        self._base_env = AuctionNetEnv(data_filenames=data_filenames, min_remaining_budget=min_remaining_budget)
+        self._test_dict = self._base_env._test_dict
+        self._keys = self._base_env._keys
+
+        self._envs = []
+        for _ in range(n_envs):
+            env = AuctionNetEnv.__new__(AuctionNetEnv)
+            env._data_filenames = data_filenames
+            env._min_remaining_budget = min_remaining_budget
+            env._test_dict = self._test_dict
+            env._keys = self._keys
+            env._current_key = None
+            env._current_timestep = 0
+            env._num_timesteps = 0
+            env._pValues = []
+            env._pValueSigmas = []
+            env._leastWinningCosts = []
+            env._budget = 0.0
+            env._cpa_constraint = 0.0
+            env._remaining_budget = 0.0
+            self._envs.append(env)
+
+    def keys(self) -> list[tuple]:
+        """返回所有可用的 (period_id, advertiser_id) 组合"""
+        return self._keys.copy()
+
+    def reset(self, keys: list[tuple]) -> list[dict[str, Any]]:
+        """
+        重置多个环境到指定 episode 的初始状态。
+
+        Args:
+            keys: list of (period_id, advertiser_id) 组合，
+                  如果元素为 None 则该环境随机选择 key
+
+        Returns:
+            list of reset info dicts，与 keys 顺序对应
+        """
+        if len(keys) != self._n_envs:
+            raise ValueError(f"Expected {self._n_envs} keys, got {len(keys)}")
+        return [self._envs[i].reset(keys[i]) for i in range(self._n_envs)]
+
+    def step(self, pacers: list[np.ndarray]) -> list[dict[str, Any]]:
+        """
+        同步执行多个环境的一步出价。
+
+        Args:
+            pacers: list of pacer arrays，与环境顺序对应
+
+        Returns:
+            list of step result dicts
+        """
+        if len(pacers) != self._n_envs:
+            raise ValueError(f"Expected {self._n_envs} pacers, got {len(pacers)}")
+        return [self._envs[i].step(pacers[i]) for i in range(self._n_envs)]
