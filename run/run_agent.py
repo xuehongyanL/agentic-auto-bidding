@@ -1,16 +1,15 @@
-import argparse
-
 import yaml
 
 from agb_auctionnet.infer.evaluate import evaluate
 from agb_auctionnet.model.think_model import AuctionNetThinkModel
 from agb_core.model.act_model import ActModel
 from agb_core.model.agent_model import AgentModel
+from agb_core.utils.argparse import ArgumentParser
 from agb_core.utils.llm_backend import build_llm_backend
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = ArgumentParser()
     parser.add_argument('--config', type=str, required=True)
     parser.add_argument('--act_ckpt', type=str, required=True,
                         help='Checkpoint path for act model')
@@ -20,6 +19,8 @@ def main():
 
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
+
+    config = parser.apply_overrides(config)
 
     # 创建 Think 子模型
     bcfg = config['model']['think']['llm_backend']

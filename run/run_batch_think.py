@@ -1,4 +1,3 @@
-import argparse
 import pickle
 import re
 
@@ -7,6 +6,7 @@ import yaml
 
 from agb_auctionnet.model.think_model import AuctionNetThinkModel
 from agb_core.infer.llm_backend import VLLMBackend
+from agb_core.utils.argparse import ArgumentParser
 
 
 def parse_cot_label(thought: str) -> int:
@@ -59,7 +59,7 @@ def build_context(ep_states, ep_actions, step, budget, cpa_constraint, window_si
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = ArgumentParser()
     parser.add_argument('--config', type=str, default='config/agent_auctionnet.yaml')
     parser.add_argument('--part_path', type=str, required=True)
     parser.add_argument('--output_path', type=str, required=True)
@@ -68,6 +68,8 @@ def main():
 
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
+
+    config = parser.apply_overrides(config)
 
     llm_cfg = config['model']['think']['llm_backend']
     task_cfg = config.get('task', {})

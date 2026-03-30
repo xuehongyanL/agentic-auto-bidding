@@ -1,4 +1,3 @@
-import argparse
 import os
 import pickle
 
@@ -7,16 +6,19 @@ import yaml
 from agb_auctionnet.env.auctionnet_env import AuctionNetEnv
 from agb_auctionnet.strategy.base_strategy import AuctionNetBaseStrategy
 from agb_core.model.dt_model import DTModel
+from agb_core.utils.argparse import ArgumentParser
 from agb_core.utils.path import glob_data_paths
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = ArgumentParser()
     parser.add_argument('--config', type=str, required=True)
     args = parser.parse_args()
 
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
+
+    config = parser.apply_overrides(config)
 
     data_filenames = [str(p) for p in glob_data_paths(config['env']['data_path'])]
     env = AuctionNetEnv(data_filenames=data_filenames)

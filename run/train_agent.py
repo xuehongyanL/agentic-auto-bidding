@@ -12,7 +12,6 @@ Agent 模式训练脚本
 6. 定期保存 checkpoint
 """
 
-import argparse
 import datetime
 import os
 import pickle
@@ -28,6 +27,7 @@ from agb_auctionnet.infer.evaluate import evaluate
 from agb_auctionnet.model.think_model import AuctionNetThinkModel
 from agb_core.model.act_model import ActModel
 from agb_core.model.agent_model import AgentModel
+from agb_core.utils.argparse import ArgumentParser
 from agb_core.utils.llm_backend import build_llm_backend
 from agb_core.utils.path import glob_data_paths
 
@@ -283,7 +283,7 @@ def save_checkpoint(model, optimizer, step, path: str):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = ArgumentParser()
     parser.add_argument('--config', type=str, default='config/agent_auctionnet.yaml',
                         help='Path to config YAML')
     parser.add_argument('--save_dir', type=str, default=None,
@@ -295,6 +295,8 @@ def main():
     # 加载配置
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
+
+    config = parser.apply_overrides(config)
 
     # 保存目录
     if args.save_dir:
