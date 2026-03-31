@@ -52,10 +52,10 @@ def main():
                       think_batch_size=think_batch_size, act_batch_size=act_batch_size)
     print(
         f'=== Overall (think={think_batch_size}, act={act_batch_size}) ===\n'
-        f'gmv={metrics["avg_gmv"]:.2f} | '
-        f'cost={metrics["avg_cost"]:.2f} | '
-        f'cpa_ratio={metrics["avg_cpa_ratio"]:.2f} | '
-        f'score={metrics["avg_score"]:.2f}'
+        f'gmv={metrics['avg_gmv']:.2f} | '
+        f'cost={metrics['avg_cost']:.2f} | '
+        f'cpa_ratio={metrics['avg_cpa_ratio']:.2f} | '
+        f'score={metrics['avg_score']:.2f}'
     )
 
 

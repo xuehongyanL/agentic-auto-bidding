@@ -50,8 +50,8 @@ def glob_data_paths(data_path: str) -> list[Path]:
 
     if '{' not in pattern and '*' not in pattern:
         raise ValueError(
-            f'data_path \'{data_path}\' is not an existing file and contains no glob pattern. '
-            f'Use a pattern like \'part_{{0..3}}_thought.pkl\''
+            f"data_path '{data_path}' is not an existing file and contains no glob pattern. "
+            f"Use a pattern like 'part_{{0..3}}_thought.pkl'/"
         )
 
     # 将 {a..b} 范围展开为 {a,b,...,b}，wcmatch 只支持枚举形式
@@ -60,6 +60,6 @@ def glob_data_paths(data_path: str) -> list[Path]:
     pattern_paths = wcglob.glob(pattern, root_dir=data_dir, flags=wcglob.BRACE | wcglob.GLOBSTAR)
     if not pattern_paths:
         raise FileNotFoundError(
-            f'No files matched pattern \'{pattern}\' in directory \'{data_dir}\''
+            f"No files matched pattern '{pattern}' in directory '{data_dir}'"
         )
     return sorted(Path(data_dir, f) for f in pattern_paths)

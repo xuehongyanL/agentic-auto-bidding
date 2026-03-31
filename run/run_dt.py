@@ -63,12 +63,12 @@ def main():
             first_pvalue_mean=reset_info['first_pvalue_mean'],
             first_pv_num=reset_info['first_pv_num'],
         )
-        print(f'Episode: budget={reset_info["budget"]}, cpa={reset_info["cpa_constraint"]}, steps={reset_info["num_timesteps"]}')
+        print(f'Episode: budget={reset_info['budget']}, cpa={reset_info['cpa_constraint']}, steps={reset_info['num_timesteps']}')
 
         total_gmv = 0
         total_cost = 0
 
-        for step in range(1, reset_info["num_timesteps"] + 1):
+        for step in range(1, reset_info['num_timesteps'] + 1):
             _, pacer = strategy.bidding()
             print(f'Step#{step}, pacer={pacer}')
             result = env.step(pacer)

@@ -10,3 +10,14 @@ members = [
     "agb_core",
     "agb_auctionnet",
 ]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["Q"]
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "single"
+multiline-quotes = "single"
+avoid-escape = true

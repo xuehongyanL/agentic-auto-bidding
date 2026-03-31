@@ -75,8 +75,8 @@ def evaluate(
         for bi, (key, info) in enumerate(zip(batch_keys, reset_infos)):
             if verbose >= 1:
                 print(
-                    f'Episode [{key}]: budget={info["budget"]:.2f}, '
-                    f'cpa={info["cpa_constraint"]:.2f}, steps={info["num_timesteps"]}'
+                    f'Episode [{key}]: budget={info['budget']:.2f}, '
+                    f'cpa={info['cpa_constraint']:.2f}, steps={info['num_timesteps']}'
                 )
 
         batch_gmvs = [0.0] * batch_size

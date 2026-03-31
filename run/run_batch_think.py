@@ -89,7 +89,7 @@ def main():
     print(f'Episodes: {len(states_list)}, total steps: {total_steps}')
 
     # 构建推理模型
-    print(f'Building ThinkModel ({llm_cfg.get("type", "vllm")}) ...')
+    print(f'Building ThinkModel ({llm_cfg.get('type', 'vllm')}) ...')
     llm_backend = VLLMBackend(
         model_path=llm_cfg['model_path'],
         temperature=llm_cfg.get('temperature', 0.0),

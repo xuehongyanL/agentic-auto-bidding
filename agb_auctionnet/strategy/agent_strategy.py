@@ -9,9 +9,9 @@ from typing import Any
 
 import numpy as np
 
+from agb_auctionnet.strategy.base_strategy import AuctionNetMultiStrategy
 from agb_core.data.trajectory import Trajectory
 from agb_core.model.agent_model import AgentModel
-from agb_auctionnet.strategy.base_strategy import AuctionNetMultiStrategy
 
 
 class AuctionNetAgentMultiStrategy(AuctionNetMultiStrategy):

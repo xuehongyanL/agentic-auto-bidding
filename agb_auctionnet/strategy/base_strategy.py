@@ -393,7 +393,7 @@ class AuctionNetMultiStrategy:
             env_step_results: list of env step result dicts
         """
         if len(env_step_results) != self._n:
-            raise ValueError(f"Expected {self._n} results, got {len(env_step_results)}")
+            raise ValueError(f'Expected {self._n} results, got {len(env_step_results)}')
         for i, result in enumerate(env_step_results):
             self._strategies[i].update(result)
 
