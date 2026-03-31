@@ -162,6 +162,7 @@ class ActModel(BaseModel, nn.Module):
             from transformers import AutoModelForCausalLM, AutoTokenizer
             self._tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
             self._llm = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True, device_map=device)
+            self._llm.gradient_checkpointing_enable()
             self._llm.get_input_embeddings().requires_grad_(False)
 
         self._state_mean = self._state_mean.to(device)
@@ -290,7 +291,9 @@ class ActModel(BaseModel, nn.Module):
         Returns:
             embeddings: [B, seq_len, embed_dim]
         """
-        inputs = self._tokenizer(texts, return_tensors='pt', padding=True, truncation=True)
-        input_ids = inputs.input_ids.to(self._device)
+        input_ids = self._tokenizer(
+            texts, return_tensors='pt', padding=True, truncation=True,
+        ).input_ids.to(self._device)
         token_embeddings = self._llm.get_input_embeddings()(input_ids)
+        del input_ids
         return token_embeddings

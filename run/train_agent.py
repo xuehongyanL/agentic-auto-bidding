@@ -137,10 +137,12 @@ def train(config: dict, save_dir: str, dataloader: DataLoader, model, optimizer,
 
     model.train()
 
-    # 预构建 eval 专用的 Think 模型（复用，训练过程中不更新）
-    bcfg = config['model']['think']['llm_backend']
-    llm_backend = build_llm_backend(bcfg)
-    eval_think_model = AuctionNetThinkModel(llm_backend=llm_backend, verbose=0)
+    # 按需构建 eval 专用的 Think 模型（仅 eval_interval 有值时才创建）
+    eval_think_model = None
+    if eval_interval:
+        bcfg = config['model']['think']['llm_backend']
+        llm_backend = build_llm_backend(bcfg)
+        eval_think_model = AuctionNetThinkModel(llm_backend=llm_backend, verbose=0)
 
     # 可训练参数
     trainable_params = [p for p in model.parameters() if p.requires_grad]
@@ -198,8 +200,15 @@ def train(config: dict, save_dir: str, dataloader: DataLoader, model, optimizer,
                 timesteps=traj.timesteps,                         # [B, W]
             )
             # 直接调 forward 保留梯度（不用 predict_batch，因为它会 detach 转 numpy）
-            state_mean = model._state_mean.to(traj_for_model.states.device, non_blocking=True)
-            state_std = model._state_std.to(traj_for_model.states.device, non_blocking=True)
+            traj_for_model = traj_for_model._replace(
+                states=traj_for_model.states.to(device, non_blocking=True),
+                actions=traj_for_model.actions.to(device, non_blocking=True),
+                rtgs=traj_for_model.rtgs.to(device, non_blocking=True),
+                timesteps=traj_for_model.timesteps.to(device, non_blocking=True),
+                attention_mask=traj_for_model.attention_mask.to(device, non_blocking=True),
+            )
+            state_mean = model._state_mean.to(device, non_blocking=True)
+            state_std = model._state_std.to(device, non_blocking=True)
             states_norm = (traj_for_model.states - state_mean) / (state_std + 1e-9)
             traj_for_model = traj_for_model._replace(states=states_norm)
             actions_pred_tensor = model._forward_batch(thoughts, traj_for_model)
@@ -236,16 +245,16 @@ def train(config: dict, save_dir: str, dataloader: DataLoader, model, optimizer,
                     total_loss = 0.0
 
                 # 验证
-                if eval_interval and step % eval_interval == 0:
+                if eval_think_model is not None and step % eval_interval == 0:
                     model.eval()
                     agent_model = AgentModel(eval_think_model, model)
                     metrics = evaluate(agent_model, config, split='valid')
                     print(
                         f'[Eval @ Step {step}] '
-                        f'gmv={metrics["avg_gmv"]:.2f} | '
-                        f'cost={metrics["avg_cost"]:.2f} | '
-                        f'cpa={metrics["avg_cpa"]:.2f} | '
-                        f'score={metrics["avg_score"]:.2f}'
+                        f'gmv={metrics['avg_gmv']:.2f} | '
+                        f'cost={metrics['avg_cost']:.2f} | '
+                        f'cpa={metrics['avg_cpa']:.2f} | '
+                        f'score={metrics['avg_score']:.2f}'
                     )
                     model.train()
 
@@ -257,6 +266,7 @@ def train(config: dict, save_dir: str, dataloader: DataLoader, model, optimizer,
 
                 if step >= n_step:
                     break
+                del actions_pred_tensor, loss
             else:
                 # 非累积步骤：纯 forward，不 backward，节省显存
                 # detach 防止构建无用的计算图
