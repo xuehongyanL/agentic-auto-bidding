@@ -5,7 +5,7 @@ DT Model 实现
 """
 
 import math
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from agb_core.data.trajectory import Trajectory
-from agb_core.model.base_model import BaseModel, DecisionModel
+from agb_core.model.base_model import DecisionModel
 
 
 class CausalSelfAttention(nn.Module):

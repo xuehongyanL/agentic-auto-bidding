@@ -27,6 +27,7 @@ class AuctionNetEnv(OfflineEnv):
         self,
         data_filenames: list[str],
         min_remaining_budget: float = 0.1,
+        use_continuous_reward: bool = False,
     ):
         """
         初始化 AuctionNet 环境
@@ -34,9 +35,11 @@ class AuctionNetEnv(OfflineEnv):
         Args:
             data_filenames: 数据文件路径列表（CSV 或 PKL）
             min_remaining_budget: 最小剩余预算阈值，低于此值时停止出价
+            use_continuous_reward: 若为 True，则转化数为 value 的连续累积值；否则为二项分布随机 0/1
         """
         self._data_filenames = list(data_filenames)
         self._min_remaining_budget = min_remaining_budget
+        self._use_continuous_reward = use_continuous_reward
 
         # 数据存储
         self._test_dict: dict = {}
@@ -173,29 +176,59 @@ class AuctionNetEnv(OfflineEnv):
         if self._current_timestep >= self._num_timesteps:
             raise RuntimeError('Episode already finished, call reset() first')
 
-        # 获取当前时间步的数据
-        pValue = self._pValues[self._current_timestep]
-        pValueSigma = self._pValueSigmas[self._current_timestep]
-        leastWinningCost = self._leastWinningCosts[self._current_timestep]
+        result, remaining = self._step_at(self._current_timestep, self._remaining_budget, pacer)
+        self._remaining_budget = remaining
+        self._current_timestep += 1
+        return result
 
-        # pacer 是一维 array，取第一个元素
+    def step_to_end(self, pacer: np.ndarray) -> list[dict[str, Any]]:
+        """
+        使用固定 pacer 从当前状态一直 step 到 episode 结束，返回所有 step 结果。
+
+        不修改 env 状态。
+
+        Args:
+            pacer: 出价系数，一维 numpy array
+
+        Returns:
+            list of step result dicts，最后一个 dict 的 done=True
+        """
+        results = []
+        timestep = self._current_timestep
+        remaining = self._remaining_budget
+        while timestep < self._num_timesteps:
+            result, remaining = self._step_at(timestep, remaining, pacer)
+            results.append(result)
+            timestep += 1
+        return results
+
+    def _step_at(
+        self,
+        timestep: int,
+        remaining_budget: float,
+        pacer: np.ndarray,
+    ) -> tuple[dict[str, Any], float]:
+        """
+        在指定时间步用给定预算执行一步出价，返回结果和执行后的剩余预算。
+
+        不修改 self。
+        """
+        pValue = self._pValues[timestep]
+        pValueSigma = self._pValueSigmas[timestep]
+        leastWinningCost = self._leastWinningCosts[timestep]
         pacer_value = float(pacer.flatten()[0])
 
-        # 预算不足时不出价
-        if self._remaining_budget < self._min_remaining_budget:
+        if remaining_budget < self._min_remaining_budget:
             bid = np.zeros(pValue.shape[0])
         else:
-            # 出价 = bid * 目标CPA * pValue
             bid = pacer_value * self._cpa_constraint * pValue
 
-        # 模拟竞拍
         tick_value, tick_cost, tick_status, tick_conversion = self._simulate_ad_bidding(
             pValue, pValueSigma, bid, leastWinningCost
         )
 
-        # 处理超预算情况
         over_cost_ratio = max(
-            (np.sum(tick_cost) - self._remaining_budget) / (np.sum(tick_cost) + 1e-4),
+            (np.sum(tick_cost) - remaining_budget) / (np.sum(tick_cost) + 1e-4),
             0
         )
         while over_cost_ratio > 0:
@@ -210,27 +243,20 @@ class AuctionNetEnv(OfflineEnv):
                 pValue, pValueSigma, bid, leastWinningCost
             )
             over_cost_ratio = max(
-                (np.sum(tick_cost) - self._remaining_budget) / (np.sum(tick_cost) + 1e-4),
+                (np.sum(tick_cost) - remaining_budget) / (np.sum(tick_cost) + 1e-4),
                 0
             )
 
-        # 更新预算和状态
         step_cost = float(np.sum(tick_cost))
         conversion = float(np.sum(tick_conversion))
         gmv = conversion * self._cpa_constraint
-        self._remaining_budget -= step_cost
-        total_cost = self._budget - self._remaining_budget
+        new_remaining = remaining_budget - step_cost
+        total_cost = self._budget - new_remaining
+        done = (timestep + 1) >= self._num_timesteps
+        next_timestep = timestep + 1
+        next_pvalues = self._pValues[next_timestep] if next_timestep < self._num_timesteps else np.array([])
 
-        # 准备下一时间步
-        self._current_timestep += 1
-        done = self._current_timestep >= self._num_timesteps
-
-        # 获取下一步的流量信息（供 Strategy.update() 注入 cpm/cpn，供下次 bidding() 使用）
-        next_pvalues = self.get_current_pvalues()
-        next_pvalue_mean = float(np.mean(next_pvalues)) if next_pvalues.size > 0 else 0.0
-        next_pv_num = int(next_pvalues.size)
-
-        return {
+        result = {
             'cost': step_cost,
             'gmv': gmv,
             'total_cost': total_cost,
@@ -240,20 +266,21 @@ class AuctionNetEnv(OfflineEnv):
             'pvalue_mean': float(np.mean(pValue)) if pValue.shape[0] > 0 else 0.0,
             'pvalue_sum': float(np.sum(pValue)),
             'pv_num': pValue.shape[0],
-            'next_pvalue_mean': next_pvalue_mean,
-            'next_pv_num': next_pv_num,
+            'next_pvalue_mean': float(np.mean(next_pvalues)) if next_pvalues.size > 0 else 0.0,
+            'next_pv_num': int(next_pvalues.size),
             'conversion': conversion,
             'value_mean': float(np.mean(tick_value)) if tick_value.shape[0] > 0 else 0.0,
             'win_rate': float(np.mean(tick_status)) if tick_status.shape[0] > 0 else 0.0,
             'least_winning_cost_mean': float(np.mean(leastWinningCost)) if leastWinningCost.shape[0] > 0 else 0.0,
         }
+        return result, new_remaining
 
     def _simulate_ad_bidding(
         self,
         pValues: np.ndarray,
         pValueSigmas: np.ndarray,
         bids: np.ndarray,
-        leastWinningCosts: np.ndarray
+        leastWinningCosts: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         模拟广告竞拍过程
@@ -272,7 +299,10 @@ class AuctionNetEnv(OfflineEnv):
         values = np.random.normal(loc=pValues, scale=pValueSigmas)
         values = values * tick_status
         tick_value = np.clip(values, 0, 1)
-        tick_conversion = np.random.binomial(n=1, p=tick_value)
+        if self._use_continuous_reward:
+            tick_conversion = tick_value
+        else:
+            tick_conversion = np.random.binomial(n=1, p=tick_value)
 
         return tick_value, tick_cost, tick_status, tick_conversion
 
@@ -310,16 +340,22 @@ class AuctionNetMultiEnv:
         n_envs: int,
         data_filenames: list[str],
         min_remaining_budget: float = 0.1,
+        use_continuous_reward: bool = False,
     ):
         """
         Args:
             n_envs: 并行环境数量
             data_filenames: 数据文件路径列表（CSV 或 PKL）
             min_remaining_budget: 最小剩余预算阈值
+            use_continuous_reward: 是否使用连续 reward
         """
         self._n_envs = n_envs
         # 第一个 env 加载数据，其余 env 共享其数据字典
-        self._base_env = AuctionNetEnv(data_filenames=data_filenames, min_remaining_budget=min_remaining_budget)
+        self._base_env = AuctionNetEnv(
+            data_filenames=data_filenames,
+            min_remaining_budget=min_remaining_budget,
+            use_continuous_reward=use_continuous_reward,
+        )
         self._test_dict = self._base_env._test_dict
         self._keys = self._base_env._keys
 
@@ -328,6 +364,7 @@ class AuctionNetMultiEnv:
             env = AuctionNetEnv.__new__(AuctionNetEnv)
             env._data_filenames = data_filenames
             env._min_remaining_budget = min_remaining_budget
+            env._use_continuous_reward = use_continuous_reward
             env._test_dict = self._test_dict
             env._keys = self._keys
             env._current_key = None
@@ -356,8 +393,7 @@ class AuctionNetMultiEnv:
         Returns:
             list of reset info dicts，与 keys 顺序对应
         """
-        if len(keys) != self._n_envs:
-            raise ValueError(f'Expected {self._n_envs} keys, got {len(keys)}')
+        self._check_input(keys)
         return [self._envs[i].reset(keys[i]) for i in range(self._n_envs)]
 
     def step(self, pacers: list[np.ndarray]) -> list[dict[str, Any]]:
@@ -370,6 +406,22 @@ class AuctionNetMultiEnv:
         Returns:
             list of step result dicts
         """
-        if len(pacers) != self._n_envs:
-            raise ValueError(f'Expected {self._n_envs} pacers, got {len(pacers)}')
+        self._check_input(pacers)
         return [self._envs[i].step(pacers[i]) for i in range(self._n_envs)]
+
+    def step_to_end(self, pacers: list[np.ndarray]) -> list[list[dict[str, Any]]]:
+        """
+        同步对多个环境执行 step_to_end。
+
+        Args:
+            pacers: list of pacer arrays，与环境顺序对应
+
+        Returns:
+            list of list of step result dicts
+        """
+        self._check_input(pacers)
+        return [self._envs[i].step_to_end(pacers[i]) for i in range(self._n_envs)]
+
+    def _check_input(self, input_list: list[Any]):
+        if len(input_list) != self._n_envs:
+            raise ValueError(f'Expected {self._n_envs} inputs, got {len(input_list)}')

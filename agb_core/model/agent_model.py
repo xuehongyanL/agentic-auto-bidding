@@ -29,16 +29,26 @@ class AgentModel(DecisionModel):
     - traj: Trajectory
     """
 
-    def __init__(self, think_model: ThinkModel, act_model: ActModel):
+    def __init__(
+        self,
+        think_model: ThinkModel,
+        act_model: ActModel,
+        think_batch_size: int = 1,
+        act_batch_size: int = 1,
+    ):
         """
         初始化 Agent Model
 
         Args:
             think_model: Think 子模型，负责生成文本推理
             act_model: Act 子模型，负责输出动作
+            think_batch_size: Think 阶段的批大小，控制 LLM 并发显存峰值
+            act_batch_size: Act 阶段的批大小，控制 LLM 并发显存峰值
         """
         self._think_model = think_model
         self._act_model = act_model
+        self._think_batch_size = think_batch_size
+        self._act_batch_size = act_batch_size
 
         self._target_rtg = getattr(think_model, '_target_rtg', 0.0)
         self._scale = getattr(think_model, '_scale', 1.0)
@@ -51,6 +61,7 @@ class AgentModel(DecisionModel):
         context: dict,
         traj: Trajectory,
         prompt = None,
+        skip_think: bool = False,
     ) -> tuple[str, np.ndarray]:
         """
         两阶段预测：
@@ -61,12 +72,16 @@ class AgentModel(DecisionModel):
             prompt: 忽略此参数（保留接口兼容性）
             context: context_dict，供 Think 模型使用
             traj: Trajectory，供 Think 和 Act 模型使用
+            skip_think: 若为 True，跳过 Think 模型推理，response 用空字符串代替
 
         Returns:
             (response, action): response 是 Think 模型的文本响应，action 是 Act 模型预测的动作
         """
         # 第一步：调用 Think 模型获取 response
-        think_response, _ = self._think_model.predict(context=context, traj=traj)
+        if skip_think:
+            think_response = ''
+        else:
+            think_response, _ = self._think_model.predict(context=context, traj=traj)
 
         # 第二步：将 response 作为 prompt，与 traj 一起传给 Act 模型
         _, action = self._act_model.predict(prompt=think_response, traj=traj)
@@ -78,30 +93,29 @@ class AgentModel(DecisionModel):
         contexts: list[dict],
         traj: Trajectory,
         prompts = None,
+        skip_think: bool = False,
     ) -> tuple[list[str], list[Any]]:
         """
-        批量预测：多个环境在同一时间步的并行推理。
+        批量预测：内部分块执行以控制 LLM 并发显存峰值。
 
         Args:
             prompts: 忽略此参数（保留接口兼容性）
             contexts: list of context_dicts，供 Think 模型使用
             traj: batched Trajectory，供 Think 和 Act 模型使用
+            skip_think: 若为 True，跳过 Think 模型推理，responses 用空字符串代替
 
         Returns:
             (responses, actions):
                 responses: list of Think 模型的文本响应
                 actions: list of numpy arrays
         """
-        # 第一步：批量 Think
-        think_responses, _ = self._think_model.predict_batch(contexts=contexts, traj=traj)
-
-        # 第二步：批量 Act
-        _, actions = self._act_model.predict_batch(prompts=think_responses, traj=traj)
-
-        # actions shape: [B, action_dim]，拆分为 list
-        actions_list = [actions[i] for i in range(len(contexts))]
-
-        return think_responses, actions_list
+        return self.predict_batch_chunked(
+            contexts=contexts,
+            traj=traj,
+            think_batch_size=self._think_batch_size,
+            act_batch_size=self._act_batch_size,
+            skip_think=skip_think,
+        )
 
     def predict_batch_chunked(
         self,
@@ -110,6 +124,7 @@ class AgentModel(DecisionModel):
         prompts = None,
         think_batch_size: int = 1,
         act_batch_size: int = 1,
+        skip_think: bool = False,
     ) -> tuple[list[str], list[Any]]:
         """
         分块批量预测：think 和 act 分别按各自的批大小分块执行。
@@ -120,6 +135,7 @@ class AgentModel(DecisionModel):
             traj: batched Trajectory
             think_batch_size: think 阶段的批大小
             act_batch_size: act 阶段的批大小
+            skip_think: 若为 True，跳过 Think 模型推理，responses 用空字符串代替
 
         Returns:
             (responses, actions): 同 predict_batch
@@ -128,14 +144,18 @@ class AgentModel(DecisionModel):
         all_responses = [''] * n
         all_actions = [None] * n
 
-        # 分块 Think
-        for start in range(0, n, think_batch_size):
-            end = min(start + think_batch_size, n)
-            chunk_contexts = contexts[start:end]
-            chunk_traj = self._slice_trajectory(traj, start, end)
-            chunk_responses, _ = self._think_model.predict_batch(contexts=chunk_contexts, traj=chunk_traj)
-            for i, resp in enumerate(chunk_responses):
-                all_responses[start + i] = resp
+        if skip_think:
+            # 跳过 Think，用空字符串作为 prompts
+            pass
+        else:
+            # 分块 Think
+            for start in range(0, n, think_batch_size):
+                end = min(start + think_batch_size, n)
+                chunk_contexts = contexts[start:end]
+                chunk_traj = self._slice_trajectory(traj, start, end)
+                chunk_responses, _ = self._think_model.predict_batch(contexts=chunk_contexts, traj=chunk_traj)
+                for i, resp in enumerate(chunk_responses):
+                    all_responses[start + i] = resp
 
         # 分块 Act
         for start in range(0, n, act_batch_size):
@@ -149,6 +169,10 @@ class AgentModel(DecisionModel):
                 all_actions[start + i] = chunk_actions[i]
 
         return all_responses, all_actions
+
+    def get_prompt_messages(self, context: dict) -> list[dict]:
+        """返回 system + user 的 prompt messages，透传给 Think 模型。"""
+        return self._think_model.get_prompt_messages(context)
 
     @staticmethod
     def _slice_trajectory(traj: Trajectory, start: int, end: int) -> Trajectory:

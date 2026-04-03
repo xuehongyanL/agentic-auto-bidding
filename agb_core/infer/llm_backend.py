@@ -46,6 +46,7 @@ class VLLMBackend(BaseLLMBackend):
         tensor_parallel_size: int = 1,
         gpu_memory_utilization: float = 0.9,
         trust_remote_code: bool = True,
+        top_p: float = 1.0,
     ):
         self._model_path = model_path
         self._temperature = temperature
@@ -54,6 +55,7 @@ class VLLMBackend(BaseLLMBackend):
         self._tensor_parallel_size = tensor_parallel_size
         self._gpu_memory_utilization = gpu_memory_utilization
         self._trust_remote_code = trust_remote_code
+        self._top_p = top_p
         self._llm: Any = None
         self._load_model()
 
@@ -92,6 +94,7 @@ class VLLMBackend(BaseLLMBackend):
             temperature=self._temperature,
             max_tokens=self._max_tokens,
             stop=self._stop or ['<|end|>', '<|eot|>'],
+            top_p=self._top_p,
         )
         outputs = self._llm.generate(prompts, sampling_params)
         return [out.outputs[0].text for out in outputs]
@@ -106,6 +109,7 @@ class TransformersBackend(BaseLLMBackend):
         stop: Optional[list[str]] = None,
         device: str = 'cuda',
         trust_remote_code: bool = True,
+        top_p: float = 1.0,
     ):
         self._model_path = model_path
         self._temperature = temperature
@@ -113,6 +117,7 @@ class TransformersBackend(BaseLLMBackend):
         self._stop = stop or []
         self._device = device
         self._trust_remote_code = trust_remote_code
+        self._top_p = top_p
         self._model: Any = None
         self._tokenizer: Any = None
         self._load_model()
@@ -168,6 +173,7 @@ class TransformersBackend(BaseLLMBackend):
             attention_mask=batch_attention_mask,
             max_new_tokens=self._max_tokens,
             temperature=self._temperature,
+            top_p=self._top_p,
             do_sample=self._temperature > 0,
         )
 
@@ -189,12 +195,14 @@ class OpenAIBackend(BaseLLMBackend):
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: float = 120.0,
+        top_p: float = 1.0,
         **kwargs: Any,
     ):
         self._model_path = model_path
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._stop = stop or []
+        self._top_p = top_p
         self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
 
     def generate(self, messages: list[dict[str, str]]) -> str:
@@ -207,6 +215,8 @@ class OpenAIBackend(BaseLLMBackend):
             kwargs['stop'] = self._stop
         if self._temperature > 0:
             kwargs['temperature'] = self._temperature
+        if self._top_p < 1.0:
+            kwargs['top_p'] = self._top_p
         return self._client.chat.completions.create(**kwargs).choices[0].message.content
 
     def generate_batch(self, messages_list: list[list[dict[str, str]]]) -> list[str]:

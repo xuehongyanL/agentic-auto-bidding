@@ -1,7 +1,6 @@
 from abc import abstractmethod
-from typing import Any, Optional
+from typing import Any
 
-from agb_core.data.trajectory import Trajectory
 from agb_core.infer.llm_backend import BaseLLMBackend
 from agb_core.model.base_model import BaseModel
 
@@ -117,6 +116,21 @@ class ThinkModel(BaseModel):
     def _parse_response(self, response: str):
         """解析 LLM 响应，基类返回 None，子类可覆盖"""
         pass
+
+    def get_prompt_messages(self, context: dict, prompts=None, traj=None) -> list[dict]:
+        """
+        返回 system + user 的 prompt messages 列表，供外部记录使用。
+
+        子类应重写此方法，复用内部 prompt 构造逻辑。
+        """
+        internal_prompt = self._build_prompt(context)
+        system_prompt = self._get_system_prompt()
+        if system_prompt:
+            return [
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': internal_prompt},
+            ]
+        return [{'role': 'user', 'content': internal_prompt}]
 
     def _call_llm(self, prompt: str) -> str:
         system_prompt = self._get_system_prompt()

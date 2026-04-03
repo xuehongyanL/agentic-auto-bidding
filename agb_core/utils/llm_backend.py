@@ -12,6 +12,7 @@ def build_llm_backend(bcfg: dict):
             max_tokens=bcfg['max_tokens'],
             stop=bcfg.get('stop', []),
             device=bcfg.get('device', 'cuda'),
+            top_p=bcfg.get('top_p', 1.0),
         )
     elif backend_type == 'vllm':
         return VLLMBackend(
@@ -21,6 +22,7 @@ def build_llm_backend(bcfg: dict):
             stop=bcfg.get('stop', []),
             tensor_parallel_size=bcfg.get('tensor_parallel_size', 1),
             gpu_memory_utilization=bcfg.get('gpu_memory_utilization', 0.9),
+            top_p=bcfg.get('top_p', 1.0),
         )
     elif backend_type == 'openai':
         return OpenAIBackend(
@@ -31,6 +33,7 @@ def build_llm_backend(bcfg: dict):
             base_url=bcfg.get('base_url'),
             api_key=bcfg.get('api_key'),
             timeout=bcfg.get('timeout', 120.0),
+            top_p=bcfg.get('top_p', 1.0),
         )
     else:
         raise ValueError(f'Unknown llm_backend type: {backend_type}')

@@ -1,3 +1,5 @@
+import pickle
+
 import yaml
 
 from agb_auctionnet.infer.evaluate import evaluate
@@ -13,8 +15,15 @@ def main():
     parser.add_argument('--config', type=str, required=True)
     parser.add_argument('--act_ckpt', type=str, required=True,
                         help='Checkpoint path for act model')
+    parser.add_argument('--split', type=str, default='test',
+                        choices=['valid', 'test', 'explore'],
+                        help='Data split to evaluate on')
+    parser.add_argument('--out', type=str, default=None,
+                        help='Path to save trajectories as pkl')
     parser.add_argument('--verbose', type=int, default=0,
                         help='0: no output, 1: episode summary, 2: step details')
+    parser.add_argument('--think_ckpt', type=str, default=None,
+                        help='Full-parameter think model dir. If omitted, uses base model from config.')
     args = parser.parse_args()
 
     with open(args.config, 'r') as f:
@@ -24,6 +33,22 @@ def main():
 
     # 创建 Think 子模型
     bcfg = config['model']['think']['llm_backend']
+    if args.think_ckpt:
+        bcfg = {**bcfg, 'model_path': args.think_ckpt}
+
+    # explore 模式下应用专属的采样参数
+    if args.split == 'explore':
+        if override_temperature := config['infer']['explore'].get('override_temperature'):
+            bcfg['temperature'] = override_temperature
+        if override_top_p := config['infer']['explore'].get('override_top_p'):
+            bcfg['top_p'] = override_top_p
+
+    # test 模式不需要 skip_think
+    if args.split == 'test':
+        first_try_skip_think = False
+    else:
+        first_try_skip_think = True
+
     llm_backend = build_llm_backend(bcfg)
     think_model = AuctionNetThinkModel(
         llm_backend=llm_backend,
@@ -43,13 +68,21 @@ def main():
     act_model.load_model(args.act_ckpt)
     act_model.eval()
 
-    # 创建组合模型
-    agent_model = AgentModel(think_model, act_model)
-
-    think_batch_size = config['infer']['test']['think_batch_size']
-    act_batch_size = config['infer']['test']['act_batch_size']
-    metrics = evaluate(agent_model, config, split='test', verbose=args.verbose,
-                      think_batch_size=think_batch_size, act_batch_size=act_batch_size)
+    think_batch_size = config['infer']['think_batch_size']
+    act_batch_size = config['infer']['act_batch_size']
+    agent_model = AgentModel(
+        think_model, act_model,
+        think_batch_size=think_batch_size,
+        act_batch_size=act_batch_size,
+    )
+    metrics, trajectories = evaluate(agent_model,
+                                     config,
+                                     split=args.split,
+                                     first_try_skip_think=first_try_skip_think,
+                                     verbose=args.verbose)
+    if args.out:
+        with open(args.out, 'wb') as f:
+            pickle.dump(trajectories, f)
     print(
         f'=== Overall (think={think_batch_size}, act={act_batch_size}) ===\n'
         f'gmv={metrics['avg_gmv']:.2f} | '

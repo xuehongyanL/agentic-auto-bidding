@@ -4,11 +4,10 @@ AuctionNet Think Model 实现
 基于 Thinking LLM 的出价模型，负责 prompt 构造和 response 解析。
 """
 
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
-from agb_core.data.trajectory import Trajectory
 from agb_core.infer.llm_backend import BaseLLMBackend
 from agb_core.model.think_model import ThinkModel
 
@@ -191,6 +190,17 @@ class AuctionNetThinkModel(ThinkModel):
 
         # 默认返回 0
         return np.array([0])
+
+    def get_prompt_messages(self, context: dict, prompts=None, traj=None) -> list[dict]:
+        """复用内部 _build_prompt 逻辑，返回 system + user messages。"""
+        internal_prompt = self._build_prompt(context)
+        system_prompt = self._get_system_prompt()
+        if system_prompt:
+            return [
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': internal_prompt},
+            ]
+        return [{'role': 'user', 'content': internal_prompt}]
 
     def _get_system_prompt(self) -> str:
         """获取 system prompt"""

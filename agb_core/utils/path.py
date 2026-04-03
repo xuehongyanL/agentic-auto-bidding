@@ -49,10 +49,7 @@ def glob_data_paths(data_path: str) -> list[Path]:
     pattern = p.name
 
     if '{' not in pattern and '*' not in pattern:
-        raise ValueError(
-            f"data_path '{data_path}' is not an existing file and contains no glob pattern. "
-            f"Use a pattern like 'part_{{0..3}}_thought.pkl'/"
-        )
+        return [p]
 
     # 将 {a..b} 范围展开为 {a,b,...,b}，wcmatch 只支持枚举形式
     pattern = _expand_range_in_brace(pattern)

@@ -248,12 +248,12 @@ def train(config: dict, save_dir: str, dataloader: DataLoader, model, optimizer,
                 if eval_think_model is not None and step % eval_interval == 0:
                     model.eval()
                     agent_model = AgentModel(eval_think_model, model)
-                    metrics = evaluate(agent_model, config, split='valid')
+                    metrics, _ = evaluate(agent_model, config, split='valid')
                     print(
                         f'[Eval @ Step {step}] '
                         f'gmv={metrics['avg_gmv']:.2f} | '
                         f'cost={metrics['avg_cost']:.2f} | '
-                        f'cpa={metrics['avg_cpa']:.2f} | '
+                        f'cpa_ratio={metrics['avg_cpa_ratio']:.2f} | '
                         f'score={metrics['avg_score']:.2f}'
                     )
                     model.train()

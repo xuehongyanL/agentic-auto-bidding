@@ -141,7 +141,7 @@ class AuctionNetBaseStrategy(BaseStrategy):
         dt_input = self._build_model_input()
         return context_dict, dt_input
 
-    def post_bidding(self, response, action) -> tuple:
+    def post_bidding(self, response, action) -> tuple[None, np.ndarray]:
         """
         Bidding 后处理：将模型输出的 action 转换为 pacer 并更新历史。
 
@@ -353,14 +353,15 @@ class AuctionNetMultiStrategy:
                 first_pv_num=info['first_pv_num'],
             )
 
-    def bidding(self) -> list[tuple]:
+    def pre_bidding(self) -> tuple:
         """
-        批量 bidding：调用 pre_bidding 收集所有上下文，一次模型调用，post_bidding 分布结果。
+        Bidding 预处理：收集所有子策略的上下文，合并为 batched Trajectory。
+
+        调用子策略的 pre_bidding（含副作用：追加历史）。
 
         Returns:
-            list of (response, pacer) tuples
+            (context_dicts, merged_traj): 供外部多次调用 model.predict_batch 使用
         """
-        # 预处理：构建所有 context 和 trajectory
         context_dicts = []
         trajectories = []
         for s in self._strategies:
@@ -368,8 +369,6 @@ class AuctionNetMultiStrategy:
             context_dicts.append(context_dict)
             trajectories.append(dt_input)
 
-        # 批量模型调用
-        from agb_core.data.trajectory import Trajectory
         merged_traj = Trajectory(
             states=np.stack([t.states for t in trajectories]),
             actions=np.stack([t.actions for t in trajectories]),
@@ -377,12 +376,33 @@ class AuctionNetMultiStrategy:
             timesteps=np.stack([t.timesteps for t in trajectories]),
             attention_mask=np.stack([t.attention_mask for t in trajectories]),
         )
-        _, actions_list = self._model.predict_batch(contexts=context_dicts, traj=merged_traj)
+        return context_dicts, merged_traj
 
-        # 后处理：转换并返回
+    def bidding(self) -> list[tuple]:
+        """
+        批量 bidding：调用 pre_bidding 收集所有上下文，一次模型调用，post_bidding 分布结果。
+
+        Returns:
+            list of (response, pacer) tuples
+        """
+        context_dicts, merged_traj = self.pre_bidding()
+        _, actions_list = self._model.predict_batch(contexts=context_dicts, traj=merged_traj)
+        return self.post_bidding(responses=[], actions=actions_list)
+
+    def post_bidding(self, responses: list, actions: list) -> list[tuple[None, np.ndarray]]:
+        """
+        Bidding 后处理：批量将 actions 转换为 pacers 并提交到历史。
+
+        Args:
+            responses: 模型响应列表（忽略）
+            actions: 模型预测的动作列表
+
+        Returns:
+            list of (response, pacer) tuples
+        """
         results = []
-        for i, s in enumerate(self._strategies):
-            results.append(s.post_bidding(None, actions_list[i]))
+        for s, action in zip(self._strategies, actions):
+            results.append(s.post_bidding(None, action))
         return results
 
     def update_batch(self, env_step_results: list[dict[str, Any]]) -> None:
