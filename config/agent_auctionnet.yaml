@@ -39,15 +39,15 @@ task:
 
 train:
   think:
-    data_path: /DATA/xuehy/ad/AGB/traj5_1.pkl
-    num_epochs: 10
+    data_path: /DATA/xuehy/ad/AGB/traj5_2.pkl
+    num_epochs: 6
     per_device_train_batch_size: 4
     gradient_accumulation_steps: 4
     learning_rate: 1.0e-4
     warmup_ratio: 0.1
     max_seq_length: 2048
-    logging_steps: 50
-    save_steps: 84
+    logging_steps: 10
+    save_steps: 100
     save_total_limit: null
     finetune_mode: full  # qlora | full
     lora_r: 16
