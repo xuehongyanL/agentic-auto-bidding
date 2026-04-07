@@ -1,5 +1,4 @@
 import contextlib
-from typing import Optional
 
 import numpy as np
 import torch
@@ -52,49 +51,61 @@ class DecisionEmbeddingLayer(nn.Module):
 
     def forward(self, trajectory: Trajectory) -> torch.Tensor:
         """
-        按照论文结构: {R_{t-L}, s_{t-L}, a_{t-L}, ..., R_t, s_t}
-        每个元素（RTG/状态/动作）整体投影为一个 token
+        按 DT 交错结构组织序列: [R_0, s_0, a_0, R_1, s_1, a_1, ..., R_{W-1}, s_{W-1}]
+
+        输入形状（train_agent.py 构造后）:
+        - states:  [B, W, S]   — 去掉了 next_state，末尾 s_{W-1} 是最后决策步状态
+        - actions: [B, W, A]   — 末尾 a_{W-1} 是 placeholder（待预测位）
+        - rtgs:    [B, W, 1]   — 去掉了末尾 rtg，R_{W-1} 是最后有效累积回报
+
+        去掉 placeholder action 后，末尾为 [R_{W-1}, s_{W-1}]，共 3W-1 个 token。
+
+        标准 causal mask 自动保证:
+        - s_t (pos 3t+1) 无法 attend 到 a_t (pos 3t+2)，因为 3t+1 < 3t+2
+        - a_t (pos 3t+2) 无法 attend 到 s_{t+1} (pos 3t+4)，因为 3t+2 < 3t+4
 
         Args:
-            trajectory: Trajectory namedtuple，各字段 shape [B, T, dim]
+            trajectory: Trajectory namedtuple
 
         Returns:
-            dt_embeddings: [B, seq_len, embed_dim]
+            dt_embeddings: [B, 3*W - 1, embed_dim]
         """
         states = trajectory.states
         actions = trajectory.actions
         rtgs = trajectory.rtgs
 
-        embeddings_list = []
-
-        if rtgs.shape[1] > 0:
-            rtg_embedded = self.rtg_mlp(rtgs)
-            rtg_embedded = rtg_embedded.unsqueeze(2)
-            embeddings_list.append(rtg_embedded)
-
-        if states.numel() > 0:
-            states_embedded = self.state_mlp(states)
-            states_embedded = states_embedded.unsqueeze(2)
-            embeddings_list.append(states_embedded)
-
-        if actions.numel() > 0:
-            actions_embedded = self.action_mlp(actions)
-            actions_embedded = actions_embedded.unsqueeze(2)
-            embeddings_list.append(actions_embedded)
-
-        if embeddings_list:
-            dt_embeddings = torch.cat(embeddings_list, dim=2)
-            B, T_p1, _, E = dt_embeddings.shape
-            dt_embeddings = dt_embeddings.view(B, T_p1 * 3, E)
-        else:
+        if not states.numel() > 0:
             B = states.shape[0]
-            dt_embeddings = torch.zeros(B, 0, self._embed_dim, device=self._device)
+            return torch.zeros(B, 0, self._embed_dim, device=self._device)
 
-        return dt_embeddings
+        W = actions.shape[1]  # = states.shape[1] = rtgs.shape[1]
+
+        # [B, W, embed_dim]
+        rtg_embedded = self.rtg_mlp(rtgs)           # R_0 .. R_{W-1}
+        state_embedded = self.state_mlp(states)     # s_0 .. s_{W-1}
+        action_embedded = self.action_mlp(actions[:, :-1])  # a_0 .. a_{W-2}（去掉 placeholder）
+
+        # [B, W-1, 3, embed_dim] -> [B, 3*(W-1), embed_dim]
+        interleaved = torch.stack(
+            [rtg_embedded[:, :-1], state_embedded[:, :-1], action_embedded], dim=2
+        ).view(states.shape[0], 3 * (W - 1), self._embed_dim)
+
+        # 追加末尾的 [R_{W-1}, s_{W-1}]（无对应 action）
+        tail = torch.cat(
+            [rtg_embedded[:, -1:], state_embedded[:, -1:]], dim=1
+        )  # [B, 2, embed_dim]
+
+        return torch.cat([interleaved, tail], dim=1)  # [B, 3W - 1, embed_dim]
 
 
 class ActionHead(nn.Module):
-    """从 LLM 隐藏状态预测动作"""
+    """
+    从 LLM 隐藏状态预测动作。
+
+    交错序列结构: [R_0, s_0, a_0, R_1, s_1, a_1, ..., R_{W-1}, s_{W-1}] (共 3W-1)
+    - 无 action token，末尾 token 为 s_{W-1}（最后决策步状态）
+    - s_{W-1} 隐含了预测 a_{W-1} 所需的完整上下文
+    """
 
     def __init__(self, hidden_size: int, action_dim: int = 1):
         super().__init__()
@@ -260,6 +271,14 @@ class ActModel(BaseModel, nn.Module):
         """
         批量前向传播
 
+        因果性保证（仅需拼接顺序，无需额外 position_ids）：
+        - torch.cat([dt_embeds, text_embeds]) 后：
+        -   dt 位置 [0, 1, ..., 3W-2]  <  text 位置 [3W-1, ...]
+        -   Causal mask: 位置 i 只能 attend 到 j < i
+        -   dt token (pos 3W-2): j < 3W-2 → 不包含任何 text 位置 → dt 无法 attend 到 text
+        -   text token (pos 3W-1): j < 3W-1 → 包含所有 dt 位置 → text 可以 attend 到 dt
+        - 结果: 单向 cross-attention: dt → text，text 无法回看 dt
+
         Args:
             text_prompts: list[str]，每个样本一个 prompt
             trajectory: Trajectory namedtuple，各字段 shape [B, T, dim]
@@ -269,9 +288,10 @@ class ActModel(BaseModel, nn.Module):
         """
         context = torch.no_grad() if not self.training else contextlib.nullcontext()
         with context:
-            text_embeds = self._tokenize_batch(text_prompts)
-            dt_embeds = self._decision_embedding(trajectory)
-            combined_embeds = torch.cat([text_embeds, dt_embeds], dim=1)
+            text_embeds = self._tokenize_batch(text_prompts)  # [B, L, E]
+            dt_embeds = self._decision_embedding(trajectory)    # [B, 3W-1, E]
+            # dt 在前 text 在后 → 因果 mask 自动保证单向 cross-attention
+            combined_embeds = torch.cat([dt_embeds, text_embeds], dim=1)
             outputs = self._llm(
                 inputs_embeds=combined_embeds,
                 return_dict=True,
