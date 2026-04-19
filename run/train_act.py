@@ -236,11 +236,12 @@ def train(config: dict, save_dir: str, dataloader: DataLoader, model, optimizer,
                 # 日志
                 if log_interval and step % log_interval == 0:
                     avg_loss = total_loss / log_interval
-                    elapsed = time.time() - start_time
+                    elapsed_time = time.time() - start_time
+                    elapsed_steps = step - resume_step
                     lr = optimizer.param_groups[0]['lr']
                     print(
                         f'[Step {step}/{n_step}] loss={avg_loss:.6f} | lr={lr:.2e} | '
-                        f'elapsed={elapsed:.0f}s | steps/s={step/elapsed:.1f}'
+                        f'elapsed={elapsed_time:.0f}s | steps/s={elapsed_steps/elapsed_time:.1f}'
                     )
                     total_loss = 0.0
 
