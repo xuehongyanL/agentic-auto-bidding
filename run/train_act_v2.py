@@ -1,15 +1,24 @@
 """
-Agent 模式训练脚本
+Agent 模式训练脚本 v2
 
-基于 agent_auctionnet.yaml 配置，训练 ActModel（全参数训练）。
+基于 agent_auctionnet.yaml 配置，训练 ActModelV1/V2/DT（全参数训练）。
+
+act_model_v2 新特性：
+1. ActEmbeddingLayer 封装 LLM forward，对外只暴露 last_hidden_state
+2. 各子类（V1/V2/DT）实现独立的 _forward_batch 和 _get_action
+3. get_loss(traj, thoughts) 内部完成 target 构造，无需外部传入
+   - V1: action loss
+   - V2: action + rtg loss
+   - DT: state + action + rtg loss（全序列）
+4. 推理用 predict_batch，通过 _get_action 统一返回 [B, A]
+5. 训练时 a_{W-1} 使用真实值（causal attention 保证无信息泄露）
 
 训练流程：
-1. 加载 YAML 配置和 normalize_dict
-2. 构建 AuctionNetDataset（从 env.data_path 的 CSV）
-3. 初始化 ActModel，加载 LLM backbone（全参数可训练）
-4. 设置优化器（AdamW，优化所有参数）
-5. 训练循环：DataLoader -> 前向传播 -> MSE Loss -> 反向传播 -> 梯度更新
-6. 定期保存 checkpoint
+1. 加载 YAML 配置
+2. 根据 model.act_v2.type 构建 ActModelV1/V2/DT
+3. 从 dataset 获取归一化统计量并注入模型
+4. 训练循环：get_loss -> sum losses -> backward -> step
+5. 定期保存 checkpoint
 """
 
 import datetime
@@ -18,23 +27,28 @@ import pickle
 import time
 
 import torch
-import torch.nn as nn
 import yaml
 from torch.utils.data import DataLoader
 
 from agb_auctionnet.data.dataset import AuctionNetDataset
 from agb_auctionnet.infer.evaluate import evaluate
 from agb_auctionnet.model.think_model import AuctionNetThinkModel
-from agb_core.model.act_model import ActModel
+from agb_core.model.act_model_v2 import ActModelV1, ActModelV2, ActModelDT
 from agb_core.model.agent_model import AgentModel
 from agb_core.utils.argparse import ArgumentParser
 from agb_core.utils.llm_backend import build_llm_backend
 from agb_core.utils.path import glob_data_paths
 
+MODEL_CLASSES = {
+    'ActModelV1': ActModelV1,
+    'ActModelV2': ActModelV2,
+    'ActModelDT': ActModelDT,
+}
 
-def setup_model(config: dict, resume: str | None, dataloader: DataLoader):
+
+def build_model(config: dict, resume: str | None, dataloader: DataLoader):
     """
-    构建 model 和 optimizer，支持从 resume checkpoint 恢复。
+    根据配置构建 ActModelV1/V2/DT，支持从 resume checkpoint 恢复。
 
     Args:
         config: 配置 dict
@@ -45,11 +59,18 @@ def setup_model(config: dict, resume: str | None, dataloader: DataLoader):
         (model, optimizer, resume_step)
     """
     device = config['device']
+    act_cfg = config['model']['act']
     train_cfg = config['train']['act']
 
-    model = ActModel(
-        base_model_path=config['model']['act']['path'],
-        model_type=config['model']['act']['backend'],
+    model_name = act_cfg.get('name', 'ActModelV2')
+    if model_name not in MODEL_CLASSES:
+        raise ValueError(f'train_act_v2.py 不支持 {model_name}，可选: {list(MODEL_CLASSES.keys())}')
+
+    model_cls = MODEL_CLASSES[model_name]
+    print(f'[Model] class={model_name}')
+    model = model_cls(
+        base_model_path=act_cfg['path'],
+        model_type=act_cfg.get('backend', 'transformers'),
         state_dim=config['task']['state_dim'],
         action_dim=config['task']['action_dim'],
         device=device,
@@ -63,12 +84,12 @@ def setup_model(config: dict, resume: str | None, dataloader: DataLoader):
 
     if resume:
         print(f'[Setup] resume from {resume}')
-        checkpoint = torch.load(resume, map_location='cpu')
+        checkpoint = torch.load(resume, map_location='cpu', weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         resume_step = checkpoint['step']
     else:
-        print('[Setup] from scratch')
+        print(f'[Setup] from scratch')
         assert isinstance(dataloader.dataset, AuctionNetDataset)
         model.set_normalize(dataloader.dataset.state_mean, dataloader.dataset.state_std)
         resume_step = 0
@@ -102,7 +123,6 @@ def build_dataloader(config: dict) -> DataLoader:
     )
     dataset.load(data_dicts)
 
-    # 过滤 thoughts
     ft_cfg = train_cfg.get('filter_thoughts')
     if ft_cfg:
         filter_mode = ft_cfg.get('mode', 'any')
@@ -121,7 +141,21 @@ def build_dataloader(config: dict) -> DataLoader:
     return dataloader
 
 
-def train(config: dict, save_dir: str, dataloader: DataLoader, model, optimizer, resume_step: int = 0):
+def train(
+    config: dict,
+    save_dir: str,
+    dataloader: DataLoader,
+    model,
+    optimizer,
+    resume_step: int = 0,
+):
+    """
+    训练循环。
+
+    核心变化（相比 v1）：
+    - 直接调用 model.get_loss(traj, thoughts)，无需手动构造 placeholder / target / normalize
+    - get_loss 返回 dict[str, Tensor]，可按需加权求和
+    """
     device = config['device']
     train_cfg = config['train']['act']
     n_step = train_cfg['n_step']
@@ -130,25 +164,26 @@ def train(config: dict, save_dir: str, dataloader: DataLoader, model, optimizer,
     save_interval = train_cfg.get('save_interval', None)
     log_interval = train_cfg.get('log_interval', None)
 
+    # 必须显式配置，缺少则报错
+    loss_weights = train_cfg['loss_weights']
+
     print(f'[Train] Device: {device}')
-    print(f'[Train] Total steps: {n_step}, batch_size: {train_cfg['batch_size']}, lr: {train_cfg['learning_rate']}')
+    print(f'[Train] Total steps: {n_step}, batch_size: {train_cfg["batch_size"]}, lr: {train_cfg["learning_rate"]}')
+    print(f'[Train] Loss weights: {loss_weights if loss_weights else "all=1.0"}')
     assert isinstance(dataloader.dataset, AuctionNetDataset)
     print(f'[Train] Dataset size: {len(dataloader.dataset)}, batches: {len(dataloader)}')
 
     model.train()
 
-    # 按需构建 eval 专用的 Think 模型（仅 eval_interval 有值时才创建）
     eval_think_model = None
     if eval_interval:
         bcfg = config['model']['think']['llm_backend']
         llm_backend = build_llm_backend(bcfg)
         eval_think_model = AuctionNetThinkModel(llm_backend=llm_backend, verbose=0)
 
-    # 可训练参数
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     print(f'[Train] Trainable params: {sum(p.numel() for p in trainable_params):,}')
 
-    # 学习率调度器（可选）
     scheduler_cfg = train_cfg.get('scheduler')
     if scheduler_cfg:
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -160,16 +195,12 @@ def train(config: dict, save_dir: str, dataloader: DataLoader, model, optimizer,
     else:
         scheduler = None
 
-    # 损失函数
-    criterion = nn.MSELoss()
-
-    # 训练状态
     step = resume_step
-    accum_step = step % grad_accum_steps  # 独立的累积计数器
+    accum_step = step % grad_accum_steps
     total_loss = 0.0
     epoch = 0
 
-    print(f'[Train] Starting training...')
+    print('[Train] Starting training...')
     start_time = time.time()
 
     while step < n_step:
@@ -177,50 +208,17 @@ def train(config: dict, save_dir: str, dataloader: DataLoader, model, optimizer,
         for batch in dataloader:
             traj, thoughts, step_info, traj_info = batch
 
-            # 目标动作：取每个 trajectory 最后一步的真实动作
-            # attention_mask: [B, W, A]，max over A 维得到每步是否有效
-            # argmax 得到最后有效位置（valid 全是1，padding 全是0）
-            valid_mask = traj.attention_mask.max(dim=2)[0]  # [B, W]
-            B = traj.states.shape[0]
-            target_tensor = traj.actions[:, -1].to(device)  # [B, action_dim]
+            # get_loss 接收原始 traj（ActEmbeddingLayer 内部处理归一化）
+            # traj.actions 全为真实值，不需要 placeholder
+            losses = model.get_loss(traj, thoughts)
+            total_batch_loss: torch.Tensor = torch.stack(
+                [losses[k] * loss_weights[k] for k in losses]
+            ).sum()
 
-            # 构造模型输入：与推理阶段完全对齐，无未来信息泄漏
-            # dataset 原始: states[W+1], actions[W], rtgs[W+1]
-            # 模型期望: states[W], actions[W]（末尾 placeholder）, rtgs[W]
-            #   states: 去掉最后一个 next_state
-            #   actions: 历史动作 + placeholder（末尾替换 target）
-            #   rtgs: 去掉最后一个 rtg
-            W = valid_mask.shape[1]
-            A = model._action_dim
-            placeholder = torch.zeros(B, 1, A, device=traj.actions.device, dtype=traj.actions.dtype)
-            traj_for_model = traj._replace(
-                states=traj.states[:, :-1],                       # [B, W+1, S] -> [B, W, S]
-                actions=torch.cat([traj.actions[:, :-1], placeholder], dim=1),  # [B, W, A]
-                rtgs=traj.rtgs[:, :-1],                          # [B, W+1, 1] -> [B, W, 1]
-                timesteps=traj.timesteps,                         # [B, W]
-            )
-            # 直接调 forward 保留梯度（不用 predict_batch，因为它会 detach 转 numpy）
-            traj_for_model = traj_for_model._replace(
-                states=traj_for_model.states.to(device, non_blocking=True),
-                actions=traj_for_model.actions.to(device, non_blocking=True),
-                rtgs=traj_for_model.rtgs.to(device, non_blocking=True),
-                timesteps=traj_for_model.timesteps.to(device, non_blocking=True),
-                attention_mask=traj_for_model.attention_mask.to(device, non_blocking=True),
-            )
-            state_mean = model._state_mean.to(device, non_blocking=True)
-            state_std = model._state_std.to(device, non_blocking=True)
-            states_norm = (traj_for_model.states - state_mean) / (state_std + 1e-9)
-            traj_for_model = traj_for_model._replace(states=states_norm)
-            actions_pred_tensor = model._forward_batch(thoughts, traj_for_model)
-
-            # 计算损失
-            loss = criterion(actions_pred_tensor, target_tensor)
-
-            # 梯度累积：只有累积到最后一步时才 backward，其余步骤跳过
+            # 梯度累积
             accum_step += 1
             if accum_step == grad_accum_steps:
-                # 累积完成，执行 backward 和 optimizer 更新
-                loss.backward()
+                total_batch_loss.backward()
 
                 torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
                 optimizer.step()
@@ -231,35 +229,34 @@ def train(config: dict, save_dir: str, dataloader: DataLoader, model, optimizer,
                 accum_step = 0
                 step += 1
 
-                total_loss += loss.item()
+                total_loss += total_batch_loss.item()
 
-                # 日志
                 if log_interval and step % log_interval == 0:
                     avg_loss = total_loss / log_interval
                     elapsed_time = time.time() - start_time
                     elapsed_steps = step - resume_step
                     lr = optimizer.param_groups[0]['lr']
+
+                    loss_str = ' | '.join(f'{k}={losses[k].item():.4f}' for k in losses)
                     print(
-                        f'[Step {step}/{n_step}] loss={avg_loss:.6f} | lr={lr:.2e} | '
-                        f'elapsed={elapsed_time:.0f}s | steps/s={elapsed_steps/elapsed_time:.1f}'
+                        f'[Step {step}/{n_step}] total={avg_loss:.6f} | {loss_str} | '
+                        f'lr={lr:.2e} | elapsed={elapsed_time:.0f}s | {elapsed_steps/elapsed_time:.1f}it/s'
                     )
                     total_loss = 0.0
 
-                # 验证
                 if eval_think_model is not None and step % eval_interval == 0:
                     model.eval()
                     agent_model = AgentModel(eval_think_model, model)
                     metrics, _ = evaluate(agent_model, config, split='valid')
                     print(
                         f'[Eval @ Step {step}] '
-                        f'gmv={metrics['avg_gmv']:.2f} | '
-                        f'cost={metrics['avg_cost']:.2f} | '
-                        f'cpa_ratio={metrics['avg_cpa_ratio']:.2f} | '
-                        f'score={metrics['avg_score']:.2f}'
+                        f'gmv={metrics["avg_gmv"]:.2f} | '
+                        f'cost={metrics["avg_cost"]:.2f} | '
+                        f'cpa_ratio={metrics["avg_cpa_ratio"]:.2f} | '
+                        f'score={metrics["avg_score"]:.2f}'
                     )
                     model.train()
 
-                # 保存 checkpoint
                 if save_interval and step % save_interval == 0:
                     save_path = os.path.join(save_dir, f'{step}.pt')
                     save_checkpoint(model, optimizer, step, save_path)
@@ -267,24 +264,19 @@ def train(config: dict, save_dir: str, dataloader: DataLoader, model, optimizer,
 
                 if step >= n_step:
                     break
-                del actions_pred_tensor, loss
+                del losses, total_batch_loss
             else:
-                # 非累积步骤：纯 forward，不 backward，节省显存
-                # detach 防止构建无用的计算图
-                del actions_pred_tensor, loss
+                del total_batch_loss
 
-        # epoch 结束，重新打乱
         if step < n_step:
             print(f'[Epoch {epoch}] dataset exhausted, reshuffling...')
 
-    # 最后保存
     final_path = os.path.join(save_dir, f'{step}.pt')
     save_checkpoint(model, optimizer, step, final_path)
     print(f'[Train] Done! Final checkpoint: {final_path}')
 
 
 def save_checkpoint(model, optimizer, step, path: str):
-    """保存模型权重和优化器状态。"""
     checkpoint = {
         'step': step,
         'model_state_dict': model.state_dict(),
@@ -303,28 +295,23 @@ def main():
                         help='Path to checkpoint to resume from')
     args = parser.parse_args()
 
-    # 加载配置
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
 
     config = parser.apply_overrides(config)
 
-    # 保存目录
     if args.save_dir:
         save_dir = args.save_dir
     else:
         timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
-        save_dir = f'./saved_model/agent_train_{timestamp}'
+        act_type = config['model'].get('act_v2', {}).get('type', 'v2')
+        save_dir = f'./saved_model/agent_train_v2_{act_type}_{timestamp}'
     os.makedirs(save_dir, exist_ok=True)
     print(f'[Config] save_dir: {save_dir}')
 
-    # 构建 dataloader（用于归一化统计量）
     dataloader = build_dataloader(config)
+    model, optimizer, resume_step = build_model(config, args.resume, dataloader)
 
-    # 构建 model 和 optimizer
-    model, optimizer, resume_step = setup_model(config, args.resume, dataloader)
-
-    # 保存 config 副本
     config_save_path = os.path.join(save_dir, 'config.yaml')
     with open(config_save_path, 'w') as f:
         yaml.dump(config, f)

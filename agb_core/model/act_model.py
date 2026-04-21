@@ -23,31 +23,32 @@ class DecisionEmbeddingLayer(nn.Module):
         self._state_dim = state_dim
         self._action_dim = action_dim
         self._device = device
-        self.to(device)
 
         self.state_mlp = nn.Sequential(
-            nn.Linear(self._state_dim, self._embed_dim),
+            nn.Linear(state_dim, llm_embedding_dim),
             nn.GELU(),
-            nn.Linear(self._embed_dim, self._embed_dim),
+            nn.Linear(llm_embedding_dim, llm_embedding_dim),
             nn.GELU(),
-            nn.Linear(self._embed_dim, self._embed_dim),
+            nn.Linear(llm_embedding_dim, llm_embedding_dim),
         )
 
         self.action_mlp = nn.Sequential(
-            nn.Linear(self._action_dim, self._embed_dim),
+            nn.Linear(action_dim, llm_embedding_dim),
             nn.GELU(),
-            nn.Linear(self._embed_dim, self._embed_dim),
+            nn.Linear(llm_embedding_dim, llm_embedding_dim),
             nn.GELU(),
-            nn.Linear(self._embed_dim, self._embed_dim),
+            nn.Linear(llm_embedding_dim, llm_embedding_dim),
         )
 
         self.rtg_mlp = nn.Sequential(
-            nn.Linear(1, self._embed_dim),
+            nn.Linear(1, llm_embedding_dim),
             nn.GELU(),
-            nn.Linear(self._embed_dim, self._embed_dim),
+            nn.Linear(llm_embedding_dim, llm_embedding_dim),
             nn.GELU(),
-            nn.Linear(self._embed_dim, self._embed_dim),
+            nn.Linear(llm_embedding_dim, llm_embedding_dim),
         )
+
+        self.to(device)
 
     def forward(self, trajectory: Trajectory) -> torch.Tensor:
         """
@@ -143,7 +144,7 @@ class ActModel(BaseModel, nn.Module):
 
     def __init__(
         self,
-        model_path: str,
+        base_model_path: str,
         model_type: str = 'transformers',
         state_dim: int = 16,
         action_dim: int = 1,
@@ -152,8 +153,6 @@ class ActModel(BaseModel, nn.Module):
         max_tokens: int = 1024,
     ):
         super().__init__()
-        self._model_path = model_path
-        self._model_type = model_type
         self._device = device
         self._temperature = temperature
         self._max_tokens = max_tokens
@@ -171,8 +170,8 @@ class ActModel(BaseModel, nn.Module):
             raise ValueError(f'不支持的模型类型: {model_type}')
         else:
             from transformers import AutoModelForCausalLM, AutoTokenizer
-            self._tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-            self._llm = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True, device_map=device)
+            self._tokenizer = AutoTokenizer.from_pretrained(base_model_path, trust_remote_code=True)
+            self._llm = AutoModelForCausalLM.from_pretrained(base_model_path, trust_remote_code=True, device_map=device)
             self._llm.gradient_checkpointing_enable()
             self._llm.get_input_embeddings().requires_grad_(False)
 

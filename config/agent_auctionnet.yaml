@@ -27,7 +27,7 @@ model:
       # api_key: YOUR_API_KEY
       # timeout: 120.0
   act:
-    name: ActModel
+    name: ActModel # 旧版: ActModel 新版 ActModel[V1|V2|DT]
     path: /DATA/xuehy/agent/models/Qwen/Qwen2.5-0.5B-Instruct
     backend: transformers
     device: cuda:1
@@ -59,13 +59,17 @@ train:
     learning_rate: 0.00001
     batch_size: 32
     grad_accum_steps: 1
-    n_step: 30000
+    n_step: 60000
     eval_interval: null
     log_interval: 100
     save_interval: 2000
     filter_thoughts:
       mode: nonconflict  # match | nonconflict | any
       default_action: 1.0
+    loss_weights:
+      action: 1.0
+      rtg: 1.0
+      state: 1.0
 
 infer:
   strategy:

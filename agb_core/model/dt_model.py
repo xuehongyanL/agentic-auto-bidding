@@ -118,9 +118,6 @@ class DTModel(DecisionModel, nn.Module):
         self._output_mode = output_mode
         self._target_rtg = target_rtg
         self._hidden_size = hidden_size
-        self._n_layer = n_layer
-        self._n_head = n_head
-        self._n_inner = n_inner
         self._block_config = block_config
         self._max_timestep_len = max_timestep_len
 

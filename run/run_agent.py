@@ -58,7 +58,7 @@ def main():
     # 创建 Act 子模型
     act_cfg = config['model']['act']
     act_model = ActModel(
-        model_path=act_cfg['path'],
+        base_model_path=act_cfg['path'],
         model_type=act_cfg['backend'],
         state_dim=config['task']['state_dim'],
         action_dim=config['task']['action_dim'],
