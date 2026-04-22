@@ -258,20 +258,15 @@ class DTModel(DecisionModel, nn.Module):
         return None, action
 
     def _get_action(self, trajectory: Trajectory):
-        # 归一化 states（z-score）；buffer 已在模型设备上，无需额外移动
-        raw_states = torch.from_numpy(trajectory.states).to(self._device)
+        # 归一化 states（z-score）；buffer 已在模型设备上
+        raw_states = torch.tensor(trajectory.states, dtype=torch.float32, device='cpu').to(self._device)
         states = (raw_states - self._state_mean) / (self._state_std + 1e-9)
-        actions = torch.from_numpy(trajectory.actions).to(self._device)
-        rtgs = torch.from_numpy(trajectory.rtgs).to(self._device)
-        timesteps = torch.from_numpy(trajectory.timesteps).to(self._device)
-        attention_mask = torch.from_numpy(trajectory.attention_mask).to(self._device)
+        actions = torch.tensor(trajectory.actions, dtype=torch.float32, device='cpu').to(self._device)
+        rtgs = torch.tensor(trajectory.rtgs, dtype=torch.float32, device='cpu').to(self._device)
+        timesteps = torch.tensor(trajectory.timesteps, dtype=torch.int64, device='cpu').to(self._device)
+        attention_mask = torch.tensor(trajectory.attention_mask, dtype=torch.int64, device='cpu').to(self._device)
 
-        states = states.unsqueeze(0)
-        actions = actions.unsqueeze(0)
-        rtgs = rtgs.unsqueeze(0)
-        timesteps = timesteps.unsqueeze(0)
-        attention_mask = attention_mask.unsqueeze(0)
-
+        # traj 已有 batch 维（predict 中 expand_dims 添加），不再 unsqueeze
         batch_size = 1
         seq_length = states.shape[1]
 
@@ -281,6 +276,7 @@ class DTModel(DecisionModel, nn.Module):
         action_embeddings = self.embed_action(actions)
         rtg_embeddings = self.embed_rtg(rtgs)
         time_embeddings = self.embed_timestep(timesteps)
+
 
         state_embeddings = torch.cat((state_embeddings, time_embeddings), dim=-1)
         action_embeddings = torch.cat((action_embeddings, time_embeddings), dim=-1)

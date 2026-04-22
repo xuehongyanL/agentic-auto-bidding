@@ -9,6 +9,16 @@ from agb_core.utils.argparse import ArgumentParser
 from agb_core.utils.path import glob_data_paths
 
 
+def getScore_nips(reward, cpa_ratio):
+    """cpa_ratio > 1 时以 (1 / cpa_ratio)^2 惩罚 reward"""
+    beta = 2
+    penalty = 1
+    if cpa_ratio > 1:
+        coef = 1 / (cpa_ratio + 1e-10)
+        penalty = pow(coef, beta)
+    return penalty * reward
+
+
 def main():
     parser = ArgumentParser()
     parser.add_argument('--config', type=str, required=True)
@@ -20,7 +30,8 @@ def main():
     config = parser.apply_overrides(config)
 
     data_filenames = [str(p) for p in glob_data_paths(config['env']['data_path'])]
-    env = AuctionNetEnv(data_filenames=data_filenames)
+    env = AuctionNetEnv(data_filenames=data_filenames,
+                        use_continuous_reward=True)
 
     model = DTModel(
         state_dim=config['strategy']['state_dim'],
@@ -37,8 +48,6 @@ def main():
         max_timestep_len=config['model']['max_timestep_len'],
     ).load_model(config['model']['path'])
 
-    # 从 normalize_dict.pkl 导入归一化参数（向后兼容旧 checkpoint；
-    # 新 checkpoint 的 buffers 已嵌在 state_dict 中，无需此步）
     if normalize_dict_path := config['model'].get('normalize_dict_path'):
         with open(normalize_dict_path, 'rb') as f:
             normalize_dict = pickle.load(f)
@@ -52,7 +61,11 @@ def main():
     keys = env.keys()
     print(f'Available keys: {len(keys)}')
 
-    for key in keys[:1]:
+    all_gmvs: list[float] = []
+    all_costs: list[float] = []
+    all_scores: list[float] = []
+
+    for key in keys:
         reset_info = env.reset(key)
         strategy.reset()
         strategy.set_episode_info(
@@ -62,14 +75,14 @@ def main():
             first_pvalue_mean=reset_info['first_pvalue_mean'],
             first_pv_num=reset_info['first_pv_num'],
         )
-        print(f'Episode: budget={reset_info['budget']}, cpa={reset_info['cpa_constraint']}, steps={reset_info['num_timesteps']}')
+        print(f'Episode: budget={reset_info["budget"]}, cpa={reset_info["cpa_constraint"]}, steps={reset_info["num_timesteps"]}')
 
-        total_gmv = 0
-        total_cost = 0
+        total_gmv = 0.0
+        total_cost = 0.0
 
         for step in range(1, reset_info['num_timesteps'] + 1):
             _, pacer = strategy.bidding()
-            print(f'Step#{step}, pacer={pacer}')
+            # print(f'Step#{step}, pacer={pacer}')
             result = env.step(pacer)
             strategy.update(result)
 
@@ -79,7 +92,27 @@ def main():
             if result['done']:
                 break
 
-        print(f'Result: gmv={total_gmv:.2f}, cost={total_cost:.2f}, CPA={total_cost/(total_gmv+1e-9):.2f}')
+        conversions = total_gmv / (reset_info['cpa_constraint'] + 1e-9)
+        cpa_ratio = total_cost / (total_gmv + 1e-9) if total_gmv > 0 else 0.0
+        score = getScore_nips(conversions, cpa_ratio)
+
+        all_gmvs.append(total_gmv)
+        all_costs.append(total_cost)
+        all_scores.append(score)
+
+        print(f'Result: gmv={total_gmv:.2f}, cost={total_cost:.2f}, CPA={cpa_ratio:.2f}, score={score:.4f}')
+
+    n_ep = len(all_gmvs)
+    avg_gmv = sum(all_gmvs) / n_ep
+    avg_cost = sum(all_costs) / n_ep
+    avg_cpa_ratio = sum(all_costs) / (sum(all_gmvs) + 1e-9)
+    avg_score = sum(all_scores) / n_ep
+
+    print(f'\n=== Aggregated ({n_ep} episodes) ===')
+    print(f'avg_gmv:      {avg_gmv:.4f}')
+    print(f'avg_cost:     {avg_cost:.4f}')
+    print(f'avg_cpa_ratio:{avg_cpa_ratio:.4f}')
+    print(f'avg_score:    {avg_score:.4f}')
 
 
 if __name__ == '__main__':

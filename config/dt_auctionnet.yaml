@@ -1,6 +1,6 @@
 model:
   name: DTModel
-  path: /DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/500000.pt
+  path: /DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/300000.pt
   normalize_dict_path: /DATA/xuehy/ad/AAB/aab/saved_model/DTtest_stable_20260119131013/normalize_dict.pkl
   hidden_size: 512
   n_layer: 8
@@ -29,7 +29,7 @@ strategy:
 
 env:
   name: AuctionNetEnv
-  data_path: /DATA/xuehy/ad/AAB/data/traffic/sparse/period-7.csv
+  data_path: /storage/xuehy/auctionnet/traffic/sparse/period-{8..13}.csv
   min_remaining_budget: 0.1
 
 device: cuda

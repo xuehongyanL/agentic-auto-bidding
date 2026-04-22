@@ -108,13 +108,18 @@ class ActEmbeddingLayer(nn.Module):
         state_dim: int,
         action_dim: int,
         device: str = 'cuda',
+        torch_dtype: torch.dtype | None = None,
     ):
         super().__init__()
         self._device = device
+        self._torch_dtype = torch_dtype
 
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self._tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        self._llm = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True, device_map=device)
+        self._llm = AutoModelForCausalLM.from_pretrained(
+            model_path, trust_remote_code=True, device_map=device,
+            torch_dtype=torch_dtype,
+        )
         self._llm.gradient_checkpointing_enable()
         self._llm.get_input_embeddings().requires_grad_(False)
 
@@ -320,11 +325,15 @@ class ActModelBase(BaseModel, nn.Module):
         state_dim: int = 16,
         action_dim: int = 1,
         device: str = 'cuda',
+        torch_dtype: torch.dtype | None = None,
     ):
         super().__init__()
         self._device = device
+        self._state_dim = state_dim
+        self._action_dim = action_dim
         self._target_rtg = 0.0
         self._scale = 1.0
+        self._output_mode = 'pacer'
 
         if model_type != 'transformers':
             raise ValueError(f'不支持的模型类型: {model_type}')
@@ -334,6 +343,7 @@ class ActModelBase(BaseModel, nn.Module):
             state_dim=state_dim,
             action_dim=action_dim,
             device=device,
+            torch_dtype=torch_dtype,
         )
 
         self.to(device)
@@ -346,10 +356,10 @@ class ActModelBase(BaseModel, nn.Module):
         ckpt = torch.load(model_path, map_location=self._device, weights_only=False)
         state_dict = ckpt['model_state_dict']
 
-        if '_state_mean' not in state_dict:
-            state_dict['_state_mean'] = self._embedding_layer._state_mean.to(self._device)
-        if '_state_std' not in state_dict:
-            state_dict['_state_std'] = self._embedding_layer._state_std.to(self._device)
+        # v2 embedding layer 中 _state_mean/_state_std 已是 registered buffer，
+        # 从 checkpoint 中移除这两个 key，避免与 buffer 冲突
+        state_dict.pop('_state_mean', None)
+        state_dict.pop('_state_std', None)
 
         self.load_state_dict(state_dict)
         return self
@@ -430,8 +440,9 @@ class ActModelV1(ActModelBase):
         state_dim: int = 16,
         action_dim: int = 1,
         device: str = 'cuda',
+        torch_dtype: torch.dtype | None = None,
     ):
-        super().__init__(base_model_path, model_type, state_dim, action_dim, device)
+        super().__init__(base_model_path, model_type, state_dim, action_dim, device, torch_dtype)
 
         self._action_head = ActionHead(
             hidden_size=self._embedding_layer.hidden_size,
@@ -487,8 +498,9 @@ class ActModelV2(ActModelBase):
         state_dim: int = 16,
         action_dim: int = 1,
         device: str = 'cuda',
+        torch_dtype: torch.dtype | None = None,
     ):
-        super().__init__(base_model_path, model_type, state_dim, action_dim, device)
+        super().__init__(base_model_path, model_type, state_dim, action_dim, device, torch_dtype)
 
         self._action_head = ActionHead(
             hidden_size=self._embedding_layer.hidden_size,
@@ -553,8 +565,9 @@ class ActModelDT(ActModelBase):
         state_dim: int = 16,
         action_dim: int = 1,
         device: str = 'cuda',
+        torch_dtype: torch.dtype | None = None,
     ):
-        super().__init__(base_model_path, model_type, state_dim, action_dim, device)
+        super().__init__(base_model_path, model_type, state_dim, action_dim, device, torch_dtype)
 
         self._dt_head = DTOutputHead(
             hidden_size=self._embedding_layer.hidden_size,

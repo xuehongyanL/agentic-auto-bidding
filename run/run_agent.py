@@ -5,9 +5,17 @@ import yaml
 from agb_auctionnet.infer.evaluate import evaluate
 from agb_auctionnet.model.think_model import AuctionNetThinkModel
 from agb_core.model.act_model import ActModel
+from agb_core.model.act_model_v2 import ActModelV1, ActModelV2, ActModelDT
 from agb_core.model.agent_model import AgentModel
 from agb_core.utils.argparse import ArgumentParser
 from agb_core.utils.llm_backend import build_llm_backend
+
+MODEL_CLASSES = {
+    'ActModel': ActModel,
+    'ActModelV1': ActModelV1,
+    'ActModelV2': ActModelV2,
+    'ActModelDT': ActModelDT,
+}
 
 
 def main():
@@ -57,7 +65,13 @@ def main():
 
     # 创建 Act 子模型
     act_cfg = config['model']['act']
-    act_model = ActModel(
+    act_name = act_cfg['name']
+    if act_name not in MODEL_CLASSES:
+        raise ValueError(f'run_agent.py 不支持 act model: {act_name}，可选: {list(MODEL_CLASSES.keys())}')
+    act_cls = MODEL_CLASSES[act_name]
+    print(f'[Act] class={act_name}')
+
+    act_model = act_cls(
         base_model_path=act_cfg['path'],
         model_type=act_cfg['backend'],
         state_dim=config['task']['state_dim'],

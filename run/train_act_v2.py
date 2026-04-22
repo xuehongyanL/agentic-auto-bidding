@@ -28,12 +28,14 @@ import time
 
 import torch
 import yaml
+from torch.amp.autocast_mode import autocast
+from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
 
 from agb_auctionnet.data.dataset import AuctionNetDataset
 from agb_auctionnet.infer.evaluate import evaluate
 from agb_auctionnet.model.think_model import AuctionNetThinkModel
-from agb_core.model.act_model_v2 import ActModelV1, ActModelV2, ActModelDT
+from agb_core.model.act_model_v2 import ActModelDT, ActModelV1, ActModelV2
 from agb_core.model.agent_model import AgentModel
 from agb_core.utils.argparse import ArgumentParser
 from agb_core.utils.llm_backend import build_llm_backend
@@ -45,8 +47,13 @@ MODEL_CLASSES = {
     'ActModelDT': ActModelDT,
 }
 
+TORCH_DTYPES = {
+    'float16': torch.float16,
+    'bfloat16': torch.bfloat16,
+}
 
-def build_model(config: dict, resume: str | None, dataloader: DataLoader):
+
+def build_model(config: dict, resume: str | None, dataloader: DataLoader, torch_dtype: torch.dtype | None = None):
     """
     根据配置构建 ActModelV1/V2/DT，支持从 resume checkpoint 恢复。
 
@@ -54,6 +61,7 @@ def build_model(config: dict, resume: str | None, dataloader: DataLoader):
         config: 配置 dict
         resume: checkpoint 路径，None 表示 from scratch
         dataloader: 用于 from scratch 时获取归一化统计量
+        torch_dtype: LLM 加载精度，默认 None (FP32)
 
     Returns:
         (model, optimizer, resume_step)
@@ -67,13 +75,14 @@ def build_model(config: dict, resume: str | None, dataloader: DataLoader):
         raise ValueError(f'train_act_v2.py 不支持 {model_name}，可选: {list(MODEL_CLASSES.keys())}')
 
     model_cls = MODEL_CLASSES[model_name]
-    print(f'[Model] class={model_name}')
+    print(f'[Model] class={model_name}, torch_dtype={torch_dtype}')
     model = model_cls(
         base_model_path=act_cfg['path'],
         model_type=act_cfg.get('backend', 'transformers'),
         state_dim=config['task']['state_dim'],
         action_dim=config['task']['action_dim'],
         device=device,
+        torch_dtype=torch_dtype,
     )
 
     optimizer = torch.optim.AdamW(
@@ -148,6 +157,8 @@ def train(
     model,
     optimizer,
     resume_step: int = 0,
+    torch_dtype: torch.dtype | None = None,
+    use_amp: bool = False,
 ):
     """
     训练循环。
@@ -155,6 +166,7 @@ def train(
     核心变化（相比 v1）：
     - 直接调用 model.get_loss(traj, thoughts)，无需手动构造 placeholder / target / normalize
     - get_loss 返回 dict[str, Tensor]，可按需加权求和
+    - 支持 AMP 混合精度训练（use_amp=True 时启用 GradScaler）
     """
     device = config['device']
     train_cfg = config['train']['act']
@@ -170,9 +182,14 @@ def train(
     print(f'[Train] Device: {device}')
     print(f'[Train] Total steps: {n_step}, batch_size: {train_cfg["batch_size"]}, lr: {train_cfg["learning_rate"]}')
     print(f'[Train] Loss weights: {loss_weights if loss_weights else "all=1.0"}')
+    use_grad_scaler = use_amp and (torch_dtype == torch.float16)
+    print(f'[Train] AMP: autocast={use_amp}({torch_dtype}), grad_scaler={use_grad_scaler}')
+    scaler = GradScaler('cuda', enabled=use_grad_scaler)
     assert isinstance(dataloader.dataset, AuctionNetDataset)
     print(f'[Train] Dataset size: {len(dataloader.dataset)}, batches: {len(dataloader)}')
 
+    use_grad_scaler = use_amp and (torch_dtype == torch.float16)
+    scaler = GradScaler('cuda', enabled=use_grad_scaler)
     model.train()
 
     eval_think_model = None
@@ -208,9 +225,15 @@ def train(
         for batch in dataloader:
             traj, thoughts, step_info, traj_info = batch
 
-            # get_loss 接收原始 traj（ActEmbeddingLayer 内部处理归一化）
-            # traj.actions 全为真实值，不需要 placeholder
-            losses = model.get_loss(traj, thoughts)
+            traj = traj._replace(
+                states=traj.states.to(device),
+                actions=traj.actions.to(device),
+                rtgs=traj.rtgs.to(device),
+                timesteps=traj.timesteps.to(device),
+                attention_mask=traj.attention_mask.to(device),
+            )
+            with autocast('cuda', enabled=use_amp, dtype=torch_dtype or torch.bfloat16):
+                losses = model.get_loss(traj, thoughts)
             total_batch_loss: torch.Tensor = torch.stack(
                 [losses[k] * loss_weights[k] for k in losses]
             ).sum()
@@ -218,10 +241,16 @@ def train(
             # 梯度累积
             accum_step += 1
             if accum_step == grad_accum_steps:
-                total_batch_loss.backward()
-
-                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-                optimizer.step()
+                if use_grad_scaler:
+                    scaler.scale(total_batch_loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    total_batch_loss.backward()
+                    torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+                    optimizer.step()
                 if scheduler is not None:
                     scheduler.step()
                 optimizer.zero_grad()
@@ -300,23 +329,27 @@ def main():
 
     config = parser.apply_overrides(config)
 
+    amp_dtype = config['train']['act'].get('amp')
+    torch_dtype = TORCH_DTYPES.get(amp_dtype)
+    use_amp = amp_dtype is not None
+
     if args.save_dir:
         save_dir = args.save_dir
     else:
         timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
-        act_type = config['model'].get('act_v2', {}).get('type', 'v2')
-        save_dir = f'./saved_model/agent_train_v2_{act_type}_{timestamp}'
+        save_dir = f'./saved_model/agent_train_v2_{timestamp}'
     os.makedirs(save_dir, exist_ok=True)
     print(f'[Config] save_dir: {save_dir}')
 
     dataloader = build_dataloader(config)
-    model, optimizer, resume_step = build_model(config, args.resume, dataloader)
+    model, optimizer, resume_step = build_model(config, args.resume, dataloader, torch_dtype)
 
     config_save_path = os.path.join(save_dir, 'config.yaml')
     with open(config_save_path, 'w') as f:
         yaml.dump(config, f)
 
-    train(config, save_dir, dataloader, model, optimizer, resume_step)
+    train(config, save_dir, dataloader, model, optimizer, resume_step,
+          torch_dtype=torch_dtype, use_amp=use_amp)
 
 
 if __name__ == '__main__':
